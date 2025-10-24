@@ -41,6 +41,20 @@ app.get("/contents/", requireApiKey, async (req, res) => {
   } catch (e) { res.status(500).json({ error: String(e) }); }
 });
 
+app.get("/contents/:path", requireApiKey, async (req, res) => {
+  try {
+    const token = await getInstallationToken();
+    const gh = await fetch(
+      `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/contents/${encodeURIComponent(req.params.path)}`,
+      { headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json" } }
+    );
+    const data = await gh.json();
+    res.status(gh.status).json(data);
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
 app.put("/contents/:path", requireApiKey, async (req, res) => {
   try {
     const { message, content, branch, sha } = req.body || {};
