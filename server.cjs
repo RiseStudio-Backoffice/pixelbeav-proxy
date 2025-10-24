@@ -1,10 +1,10 @@
 // server.cjs — PixelBeav Proxy (Render Free compatible)
-// Lädt Env, prüft API-Key-Header, holt GitHub Installation Tokens über deine GitHub App
 // Endpunkte:
-//   GET    /contents/             -> Root-Dateien auflisten
-//   GET    /contents/:path        -> Metadaten (inkl. sha) einer Datei
-//   PUT    /contents/:path        -> Datei anlegen/aktualisieren (content base64, optional sha)
-//   DELETE /contents/:path        -> Datei löschen (sha optional; wird sonst automatisch geholt)
+//   GET    /contents/                 -> Root-Dateien auflisten
+//   GET    /contents/:path            -> Metadaten (inkl. sha) einer Datei
+//   PUT    /contents/:path            -> Datei anlegen/aktualisieren (content base64, optional sha)
+//   DELETE /contents/:path            -> Datei löschen (sha optional; wird sonst automatisch geholt)
+//   POST   /contents/:path/delete     -> "sichere" Löschung per POST (gleiches Verhalten wie DELETE)
 
 const express = require("express");
 const jwt = require("jsonwebtoken");
@@ -19,7 +19,7 @@ const {
   REPO_NAME,             // z.B. PixelBeav.App
   BRANCH,                // z.B. main
   GH_APP_PRIVATE_KEY,    // kompletter PEM-Inhalt (BEGIN/END inklusive)
-  ACTIONS_API_KEY        // dein geheimer Proxy-API-Key (Header X-API-Key)
+  ACTIONS_API_KEY        // geheimer Proxy-API-Key (Header X-API-Key)
 } = process.env;
 
 if (!APP_ID || !INSTALLATION_ID || !REPO_OWNER || !REPO_NAME || !GH_APP_PRIVATE_KEY) {
@@ -62,7 +62,7 @@ function requireApiKey(req, res, next) {
 const app = express();
 app.use(express.json({ limit: "2mb" }));
 
-// sehr schlichtes Request-Logging (hilft beim Debuggen)
+// schlichtes Request-Logging
 app.use((req, _res, next) => {
   console.log(`[req] ${req.method} ${req.url}`);
   next();
@@ -71,7 +71,7 @@ app.use((req, _res, next) => {
 // Healthcheck (optional)
 app.get("/health", (_req, res) => res.status(200).send("ok"));
 
-// GET /contents/  -> Root-Inhalt listen
+// GET /contents/  -> Root-Inhalt
 app.get("/contents/", requireApiKey, async (_req, res) => {
   try {
     const token = await getInstallationToken();
@@ -86,7 +86,7 @@ app.get("/contents/", requireApiKey, async (_req, res) => {
   }
 });
 
-// GET /contents/:path  -> Metadaten (inkl. sha) einer Datei
+// GET /contents/:path  -> File-Metadaten (inkl. sha)
 app.get("/contents/:path", requireApiKey, async (req, res) => {
   try {
     const token = await getInstallationToken();
@@ -115,8 +115,7 @@ app.put("/contents/:path", requireApiKey, async (req, res) => {
       }
     );
     const text = await gh.text();
-    let data;
-    try { data = JSON.parse(text); } catch { data = { raw: text }; }
+    let data; try { data = JSON.parse(text); } catch { data = { raw: text }; }
     res.status(gh.status).json(data);
   } catch (e) {
     res.status(500).json({ error: String(e) });
@@ -129,7 +128,7 @@ app.delete("/contents/:path", requireApiKey, async (req, res) => {
     const { message, sha, branch } = req.body || {};
     const token = await getInstallationToken();
 
-    // sha automatisch besorgen, falls nicht mitgegeben
+    // sha automatisch holen, falls fehlt
     let effectiveSha = sha;
     if (!effectiveSha) {
       const meta = await fetch(
@@ -159,8 +158,49 @@ app.delete("/contents/:path", requireApiKey, async (req, res) => {
     );
     const text = await gh.text();
     console.log(`[gh] DELETE ${req.params.path} -> ${gh.status} ${gh.statusText} :: ${text.slice(0,200)}`);
-    let data;
-    try { data = JSON.parse(text); } catch { data = { raw: text }; }
+    let data; try { data = JSON.parse(text); } catch { data = { raw: text }; }
+    res.status(gh.status).json(data);
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+// POST /contents/:path/delete  -> sichere Löschung per POST (kein Consequential-Dialog)
+app.post("/contents/:path/delete", requireApiKey, async (req, res) => {
+  try {
+    const { message, sha, branch } = req.body || {};
+    const token = await getInstallationToken();
+
+    let effectiveSha = sha;
+    if (!effectiveSha) {
+      const meta = await fetch(
+        `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/contents/${encodeURIComponent(req.params.path)}`,
+        { headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json" } }
+      );
+      const metaText = await meta.text();
+      if (!meta.ok) {
+        console.log(`[gh] GET sha (POST delete) ${req.params.path} -> ${meta.status} ${meta.statusText} :: ${metaText.slice(0,200)}`);
+        return res.status(meta.status).send(metaText);
+      }
+      const metaJson = JSON.parse(metaText);
+      effectiveSha = metaJson.sha;
+    }
+
+    const gh = await fetch(
+      `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/contents/${encodeURIComponent(req.params.path)}`,
+      {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json" },
+        body: JSON.stringify({
+          message: message || `Delete ${req.params.path} via Proxy (POST)`,
+          sha: effectiveSha,
+          branch: branch || BRANCH
+        })
+      }
+    );
+    const text = await gh.text();
+    console.log(`[gh] POST delete ${req.params.path} -> ${gh.status} ${gh.statusText} :: ${text.slice(0,200)}`);
+    let data; try { data = JSON.parse(text); } catch { data = { raw: text }; }
     res.status(gh.status).json(data);
   } catch (e) {
     res.status(500).json({ error: String(e) });
