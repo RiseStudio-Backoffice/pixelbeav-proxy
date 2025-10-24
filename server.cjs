@@ -73,14 +73,39 @@ app.delete("/contents/:path", requireApiKey, async (req, res) => {
   try {
     const { message, sha, branch } = req.body || {};
     const token = await getInstallationToken();
-    const gh = await fetch(`https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/contents/${encodeURIComponent(req.params.path)}`, {
-      method: "DELETE",
-      headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json" },
-      body: JSON.stringify({ message, sha, branch: branch || BRANCH })
-    });
+
+    // Wenn kein sha mitgegeben ist, automatisch holen
+    let effectiveSha = sha;
+    if (!effectiveSha) {
+      const meta = await fetch(
+        `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/contents/${encodeURIComponent(req.params.path)}`,
+        { headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json" } }
+      );
+      if (!meta.ok) {
+        const err = await meta.text();
+        return res.status(meta.status).send(err);
+      }
+      const metaJson = await meta.json();
+      effectiveSha = metaJson.sha;
+    }
+
+    const gh = await fetch(
+      `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/contents/${encodeURIComponent(req.params.path)}`,
+      {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json" },
+        body: JSON.stringify({
+          message: message || `Delete ${req.params.path} via Proxy`,
+          sha: effectiveSha,
+          branch: branch || BRANCH
+        })
+      }
+    );
     const data = await gh.json().catch(() => ({}));
     res.status(gh.status).json(data);
-  } catch (e) { res.status(500).json({ error: String(e) }); }
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
 });
 
 const PORT = process.env.PORT || 3000;
