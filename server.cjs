@@ -40,6 +40,8 @@ function requireApiKey(req, res, next) {
 }
 
 console.log("🔐 Geladener API_KEY ist:", process.env.API_KEY);
+console.log("📁 Zielpfad:", req.params.path);
+
 
 const app = express();
 app.use(express.json({ limit: "2mb" }));
