@@ -67,17 +67,40 @@ app.get("/contents/:path", requireApiKey, async (req, res) => {
 // Create/Update
 app.put("/contents/:path", requireApiKey, async (req, res) => {
   try {
+    const allowedWritePaths = [
+      "RULES_GPT/",
+      "README.md",
+      "src/",
+      "docs/"
+    ];
+    const targetPath = decodeURIComponent(req.params.path || "");
+    if (!allowedWritePaths.some(prefix => targetPath.startsWith(prefix))) {
+      return res.status(403).json({ error: `Write access denied for path: ${targetPath}` });
+    }
+
     const { message, content, branch, sha } = req.body || {};
     const token = await getInstallationToken();
     const gh = await fetch(`https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/contents/${encodeURIComponent(req.params.path)}`, {
       method: "PUT",
-      headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json" },
-      body: JSON.stringify({ message, content, branch: branch || BRANCH, ...(sha ? { sha } : {}) })
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/vnd.github+json"
+      },
+      body: JSON.stringify({
+        message,
+        content,
+        branch: branch || BRANCH,
+        ...(sha ? { sha } : {})
+      })
     });
-    const text = await gh.text(); let data; try { data = JSON.parse(text); } catch { data = { raw: text }; }
+    const text = await gh.text(); let data;
+    try { data = JSON.parse(text); } catch { data = { raw: text }; }
     res.status(gh.status).json(data);
-  } catch (e) { res.status(500).json({ error: String(e) }); }
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
 });
+
 
 // Delete (sha optional)
 app.delete("/contents/:path", requireApiKey, async (req, res) => {
