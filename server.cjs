@@ -80,6 +80,12 @@ app.put("/contents/:path", requireApiKey, async (req, res) => {
 
     const { message, content, branch, sha } = req.body || {};
     const token = await getInstallationToken();
+
+    console.log("📤 Upload an GitHub gestartet:", targetPath);
+    console.log("📦 Message:", message);
+    console.log("🔢 Content length:", (content || "").length);
+    console.log("🐛 SHA:", sha);
+
     const gh = await fetch(`https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/contents/${encodeURIComponent(req.params.path)}`, {
       method: "PUT",
       headers: {
@@ -93,13 +99,19 @@ app.put("/contents/:path", requireApiKey, async (req, res) => {
         ...(sha ? { sha } : {})
       })
     });
-    const text = await gh.text(); let data;
+
+    const text = await gh.text();
+    console.log("📥 Antwort von GitHub:", text);
+
+    let data;
     try { data = JSON.parse(text); } catch { data = { raw: text }; }
     res.status(gh.status).json(data);
   } catch (e) {
+    console.error("❌ Fehler beim Upload:", e);
     res.status(500).json({ error: String(e) });
   }
 });
+
 
 
 // Delete (sha optional)
