@@ -28,14 +28,18 @@ async function getInstallationToken() {
 
 // akzeptiert X-API-Key oder Authorization: Bearer <key>
 function requireApiKey(req, res, next) {
-  let key = req.headers["x-api-key"];
-  if (!key) {
-    const auth = req.headers["authorization"] || "";
-    if (auth.toLowerCase().startsWith("bearer ")) key = auth.slice(7).trim();
+  const key = req.query.apiKey || req.headers["x-api-key"];
+  console.log("🛂 Angegebener API-Key:", key);
+  console.log("🔑 Erwarteter API-Key:", process.env.API_KEY);
+  if (key !== process.env.API_KEY) {
+    console.log("❌ API-Key stimmt NICHT überein!");
+    return res.status(401).json({ error: "unauthorized" });
   }
-  if (!ACTIONS_API_KEY || key !== ACTIONS_API_KEY) return res.status(401).json({ error: "unauthorized" });
+  console.log("✅ API-Key akzeptiert.");
   next();
 }
+
+console.log("🔐 Geladener API_KEY ist:", process.env.API_KEY);
 
 const app = express();
 app.use(express.json({ limit: "2mb" }));
@@ -112,56 +116,35 @@ app.put("/contents/:path", requireApiKey, async (req, res) => {
   }
 });
 
-
-
-// Delete (sha optional)
+// Delete
 app.delete("/contents/:path", requireApiKey, async (req, res) => {
   try {
     const { message, sha, branch } = req.body || {};
     const token = await getInstallationToken();
-    let effectiveSha = sha;
-    if (!effectiveSha) {
-      const meta = await fetch(`https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/contents/${encodeURIComponent(req.params.path)}`, {
-        headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json" }
-      });
-      const metaText = await meta.text();
-      if (!meta.ok) return res.status(meta.status).send(metaText);
-      effectiveSha = JSON.parse(metaText).sha;
-    }
     const gh = await fetch(`https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/contents/${encodeURIComponent(req.params.path)}`, {
       method: "DELETE",
       headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json" },
-      body: JSON.stringify({ message: message || `Delete ${req.params.path} via Proxy`, sha: effectiveSha, branch: branch || BRANCH })
+      body: JSON.stringify({ message, sha, branch: branch || BRANCH })
     });
-    const text = await gh.text(); let data; try { data = JSON.parse(text); } catch { data = { raw: text }; }
-    res.status(gh.status).json(data);
+    const data = await gh.json(); res.status(gh.status).json(data);
   } catch (e) { res.status(500).json({ error: String(e) }); }
 });
 
-// POST delete (sicher)
+// POST-safe delete (workaround)
 app.post("/contents/:path/delete", requireApiKey, async (req, res) => {
   try {
     const { message, sha, branch } = req.body || {};
     const token = await getInstallationToken();
-    let effectiveSha = sha;
-    if (!effectiveSha) {
-      const meta = await fetch(`https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/contents/${encodeURIComponent(req.params.path)}`, {
-        headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json" }
-      });
-      const metaText = await meta.text();
-      if (!meta.ok) return res.status(meta.status).send(metaText);
-      effectiveSha = JSON.parse(metaText).sha;
-    }
     const gh = await fetch(`https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/contents/${encodeURIComponent(req.params.path)}`, {
       method: "DELETE",
       headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json" },
-      body: JSON.stringify({ message: message || `Delete ${req.params.path} via Proxy (POST)`, sha: effectiveSha, branch: branch || BRANCH })
+      body: JSON.stringify({ message, sha, branch: branch || BRANCH })
     });
-    const text = await gh.text(); let data; try { data = JSON.parse(text); } catch { data = { raw: text }; }
-    res.status(gh.status).json(data);
+    const data = await gh.json(); res.status(gh.status).json(data);
   } catch (e) { res.status(500).json({ error: String(e) }); }
 });
 
+// DEBUG: HEAD-Test für GitHub-Zugriff
 app.get("/debug/head-test", requireApiKey, async (req, res) => {
   try {
     const token = await getInstallationToken();
@@ -178,5 +161,7 @@ app.get("/debug/head-test", requireApiKey, async (req, res) => {
   }
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`pixelbeav-proxy listening on :${PORT}`));
+const PORT = process.env.PORT || 10000;
+app.listen(PORT, () => {
+  console.log(`🚀 pixelbeav-proxy listening on :${PORT}`);
+});
