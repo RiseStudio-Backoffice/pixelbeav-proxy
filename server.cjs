@@ -162,5 +162,21 @@ app.post("/contents/:path/delete", requireApiKey, async (req, res) => {
   } catch (e) { res.status(500).json({ error: String(e) }); }
 });
 
+app.get("/debug/head-test", requireApiKey, async (req, res) => {
+  try {
+    const token = await getInstallationToken();
+    const gh = await fetch("https://api.github.com/repos/RiseStudio-Backoffice/PixelBeav.App/contents/RULES_GPT/repo-interaktion-rules.json", {
+      method: "HEAD",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/vnd.github+json"
+      }
+    });
+    res.status(gh.status).send(`GitHub HEAD response: ${gh.status}`);
+  } catch (e) {
+    res.status(500).send("HEAD failed: " + e.message);
+  }
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`pixelbeav-proxy listening on :${PORT}`));
