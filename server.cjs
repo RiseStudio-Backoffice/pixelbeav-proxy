@@ -74,7 +74,7 @@ app.get("/contents/:path", requireApiKey, async (req, res) => {
 app.put("/contents/:path", requireApiKey, async (req, res) => {
   try {
     const allowedWritePaths = [
-      "RULES_GPT/",
+      "rules_gpt/",
       "README.md",
       "src/",
       "docs/"
