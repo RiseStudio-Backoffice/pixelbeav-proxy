@@ -31,13 +31,15 @@ async function getInstallationToken() {
 }
 
 function requireApiKey(req, res, next) {
-  const key = req.query.apiKey || req.headers["x-api-key"];
+  let key = req.headers["x-api-key"];
   console.log("🛂 Angegebener API-Key:", key);
   console.log("🔑 Erwarteter API-Key:", process.env.API_KEY);
-  if (key !== process.env.API_KEY) {
+  if (!key) {
     console.log("❌ API-Key stimmt NICHT überein!");
-    return res.status(401).json({ error: "unauthorized" });
+    const auth = req.headers["authorization"] || "";
+    if (auth.toLowerCase().startsWith("bearer ")) key = auth.slice(7).trim();
   }
+  if (!ACTIONS_API_KEY || key !== ACTIONS_API_KEY) return res.status(401).json({ error: "unauthorized" });
   console.log("✅ API-Key akzeptiert.");
   next();
 }
