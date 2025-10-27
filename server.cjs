@@ -24,6 +24,7 @@ function makeJwt() {
 }
 
 async function getInstallationToken() {
+  console.log("🚨 API Request URL: ", url);
   const res = await fetch(`https://api.github.com/app/installations/${INSTALLATION_ID}/access_tokens`, {
     method: "POST",
     headers: { Authorization: `Bearer ${makeJwt()}`, Accept: "application/vnd.github+json" }
