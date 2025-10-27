@@ -146,9 +146,7 @@ app.get("/contents/", requireApiKey, async (_req, res) => {
   console.log("▶️ Starte GET /contents/");
   try {
     const token = await getInstallationToken();
-    // Branch explizit angeben
     const ghUrl = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/contents/?ref=${BRANCH}`;
-    
     const gh = await fetch(ghUrl, {
       headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json" }
     });
@@ -167,6 +165,29 @@ app.get("/contents/", requireApiKey, async (_req, res) => {
   }
 });
 
+// Root-Inhalt abfragen (Ordnerinhalte)
+app.get("/contents/rules_gpt/", requireApiKey, async (_req, res) => {
+  console.log("▶️ Starte GET /contents/rules_gpt");
+  try {
+    const token = await getInstallationToken();
+    const ghUrl = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/contents/rules_gpt?ref=${BRANCH}`;
+    const gh = await fetch(ghUrl, {
+      headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json" }
+    });
+    
+    const { data, text } = await handleGitHubResponse(gh);
+    
+    if (!gh.ok) {
+        console.error(`❌ GitHub GET /contents/rules_gpt Fehler: ${gh.status} ${gh.statusText} :: ${text}`);
+    } else {
+        console.log(`✅ GitHub GET /contents/rules_gpt erfolgreich: ${gh.status}`);
+    }
+    res.status(gh.status).json(data);
+  } catch (e) {
+    console.error("❌ GET /contents/rules_gpt Fehler:", e.message);
+    res.status(500).json({ error: String(e) });
+  }
+});
 
 // GET mit verschachteltem Pfad
 // 2. RAW-Content-Support durch Query-Parameter 'raw' (z.B. ?raw=true)
