@@ -1,15 +1,21 @@
 const express = require("express");
 const jwt = require("jsonwebtoken");
 const fetch = (...a) => import("node-fetch").then(({ default: f }) => f(...a));
-require("dotenv").config();
+
+// Optional dotenv nur lokal verwenden
+try { require("dotenv").config(); } catch {}
+
+// ⬇️ Logging der geladenen Umgebungsvariablen
+console.log("🔐 SERVER START");
+console.log("🔑 API_KEY:", process.env.API_KEY ?? "[NICHT GESETZT]");
 
 const {
   APP_ID, INSTALLATION_ID, REPO_OWNER, REPO_NAME, BRANCH,
-  GH_APP_PRIVATE_KEY, ACTIONS_API_KEY
+  GH_APP_PRIVATE_KEY, API_KEY
 } = process.env;
 
 if (!APP_ID || !INSTALLATION_ID || !REPO_OWNER || !REPO_NAME || !GH_APP_PRIVATE_KEY) {
-  console.error("[boot] Missing required environment variables.");
+  console.error("[boot] ❌ Fehlende ENV-Variablen!");
   process.exit(1);
 }
 
@@ -31,20 +37,16 @@ async function getInstallationToken() {
 }
 
 function requireApiKey(req, res, next) {
-  let key = req.headers["x-api-key"];
-  console.log("🛂 Angegebener API-Key:", key);
-  console.log("🔑 Erwarteter API-Key:", process.env.API_KEY);
-  if (!key) {
+  const clientKey = req.query.apiKey || req.headers["x-api-key"];
+  console.log("🛂 Angegebener API-Key:", clientKey);
+  console.log("🗝️ Erwarteter API-Key:", API_KEY ?? "[nicht gesetzt]");
+  if (!API_KEY || clientKey !== API_KEY) {
     console.log("❌ API-Key stimmt NICHT überein!");
-    const auth = req.headers["authorization"] || "";
-    if (auth.toLowerCase().startsWith("bearer ")) key = auth.slice(7).trim();
+    return res.status(401).json({ error: "unauthorized" });
   }
-  if (!ACTIONS_API_KEY || key !== ACTIONS_API_KEY) return res.status(401).json({ error: "unauthorized" });
   console.log("✅ API-Key akzeptiert.");
   next();
 }
-
-console.log("🔐 Geladener API_KEY ist:", process.env.API_KEY);
 
 const app = express();
 app.use(express.json({ limit: "2mb" }));
@@ -52,10 +54,12 @@ app.use((req, _res, next) => {
   console.log(`[req] ${req.method} ${req.url}`);
   next();
 });
+
+// Health check
 app.get("/health", (_req, res) => res.status(200).send("ok"));
 
-// GitHub HEAD-Test
-app.get("/debug/head-test", requireApiKey, async (req, res) => {
+// HEAD-Test gegen GitHub-Datei
+app.get("/debug/head-test", requireApiKey, async (_req, res) => {
   try {
     const token = await getInstallationToken();
     const gh = await fetch("https://api.github.com/repos/RiseStudio-Backoffice/PixelBeav.App/contents/rules_gpt/repo-interaktion-rules.json", {
@@ -71,7 +75,7 @@ app.get("/debug/head-test", requireApiKey, async (req, res) => {
   }
 });
 
-// Root-Inhalt
+// Root-Inhalt abfragen
 app.get("/contents/", requireApiKey, async (_req, res) => {
   try {
     const token = await getInstallationToken();
@@ -85,12 +89,12 @@ app.get("/contents/", requireApiKey, async (_req, res) => {
   }
 });
 
-// Einzelfile-Metadaten
+// Dateimetadaten
 app.get("/contents/:path", requireApiKey, async (req, res) => {
   try {
-    const token = await getInstallationToken();
     const path = encodeURIComponent(req.params.path);
-    console.log("📁 Zielpfad (GitHub):", req.params.path);
+    const token = await getInstallationToken();
+    console.log("📁 Zielpfad (GET):", req.params.path);
     const gh = await fetch(`https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/contents/${path}`, {
       headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json" }
     });
@@ -101,21 +105,16 @@ app.get("/contents/:path", requireApiKey, async (req, res) => {
   }
 });
 
-// Datei erstellen oder aktualisieren
+// Datei erstellen/aktualisieren
 app.put("/contents/:path", requireApiKey, async (req, res) => {
   try {
     const targetPath = decodeURIComponent(req.params.path || "");
-    const allowedWritePaths = [
-      "rules_gpt/",
-      "README.md",
-      "src/",
-      "docs/"
-    ];
-    console.log("📁 Zielpfad (GitHub):", targetPath);
-
+    const allowedWritePaths = ["rules_gpt/", "README.md", "src/", "docs/"];
     if (!allowedWritePaths.some(prefix => targetPath.startsWith(prefix))) {
       return res.status(403).json({ error: `Write access denied for path: ${targetPath}` });
     }
+
+    console.log("📥 PUT in:", targetPath);
 
     const { message, content, branch, sha } = req.body || {};
     const token = await getInstallationToken();
@@ -135,7 +134,7 @@ app.put("/contents/:path", requireApiKey, async (req, res) => {
     });
 
     const text = await gh.text();
-    console.log("📥 Antwort von GitHub:", text);
+    console.log("🔁 GitHub PUT-Antwort:", text);
 
     let data;
     try { data = JSON.parse(text); } catch { data = { raw: text }; }
@@ -145,7 +144,7 @@ app.put("/contents/:path", requireApiKey, async (req, res) => {
   }
 });
 
-// Datei löschen (DELETE)
+// Datei löschen
 app.delete("/contents/:path", requireApiKey, async (req, res) => {
   try {
     const { message, sha, branch } = req.body || {};
@@ -162,7 +161,7 @@ app.delete("/contents/:path", requireApiKey, async (req, res) => {
   }
 });
 
-// POST-Alternative für Delete
+// POST-Fallback zum Löschen
 app.post("/contents/:path/delete", requireApiKey, async (req, res) => {
   try {
     const { message, sha, branch } = req.body || {};
