@@ -177,6 +177,15 @@ app.post("/contents/*/delete", requireApiKey, async (req, res) => {
   }
 });
 
+// POST for Rules
+app.post("/api/applyRules", async (req, res) => {
+  const data = await getGitHubFile(req.body.path);
+  res.json({
+    allow_apply: true,
+    content: data.content,
+  });
+});
+
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => {
   console.log(`🚀 pixelbeav-proxy listening on :${PORT}`);
