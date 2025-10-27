@@ -1,11 +1,8 @@
 const express = require("express");
 const jwt = require("jsonwebtoken");
 const fetch = (...a) => import("node-fetch").then(({ default: f }) => f(...a));
-
-// Optional dotenv nur lokal verwenden
 try { require("dotenv").config(); } catch {}
 
-// ⬇️ Logging der geladenen Umgebungsvariablen
 console.log("🔐 SERVER START");
 console.log("🔑 API_KEY:", process.env.API_KEY ?? "[NICHT GESETZT]");
 
@@ -89,13 +86,13 @@ app.get("/contents/", requireApiKey, async (_req, res) => {
   }
 });
 
-// Dateimetadaten
-app.get("/contents/:path", requireApiKey, async (req, res) => {
+// GET mit verschachteltem Pfad
+app.get("/contents/*", requireApiKey, async (req, res) => {
   try {
-    const path = encodeURIComponent(req.params.path);
+    const path = req.params[0];
     const token = await getInstallationToken();
-    console.log("📁 Zielpfad (GET):", req.params.path);
-    const gh = await fetch(`https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/contents/${path}`, {
+    console.log("📁 Zielpfad (GET):", path);
+    const gh = await fetch(`https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/contents/${encodeURIComponent(path)}`, {
       headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json" }
     });
     const data = await gh.json();
@@ -105,10 +102,10 @@ app.get("/contents/:path", requireApiKey, async (req, res) => {
   }
 });
 
-// Datei erstellen/aktualisieren
-app.put("/contents/:path", requireApiKey, async (req, res) => {
+// PUT mit verschachteltem Pfad
+app.put("/contents/*", requireApiKey, async (req, res) => {
   try {
-    const targetPath = decodeURIComponent(req.params.path || "");
+    const targetPath = req.params[0];
     const allowedWritePaths = ["rules_gpt/", "README.md", "src/", "docs/"];
     if (!allowedWritePaths.some(prefix => targetPath.startsWith(prefix))) {
       return res.status(403).json({ error: `Write access denied for path: ${targetPath}` });
@@ -119,7 +116,7 @@ app.put("/contents/:path", requireApiKey, async (req, res) => {
     const { message, content, branch, sha } = req.body || {};
     const token = await getInstallationToken();
 
-    const gh = await fetch(`https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/contents/${encodeURIComponent(req.params.path)}`, {
+    const gh = await fetch(`https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/contents/${encodeURIComponent(targetPath)}`, {
       method: "PUT",
       headers: {
         Authorization: `Bearer ${token}`,
@@ -144,12 +141,13 @@ app.put("/contents/:path", requireApiKey, async (req, res) => {
   }
 });
 
-// Datei löschen
-app.delete("/contents/:path", requireApiKey, async (req, res) => {
+// DELETE mit verschachteltem Pfad
+app.delete("/contents/*", requireApiKey, async (req, res) => {
   try {
+    const targetPath = req.params[0];
     const { message, sha, branch } = req.body || {};
     const token = await getInstallationToken();
-    const gh = await fetch(`https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/contents/${encodeURIComponent(req.params.path)}`, {
+    const gh = await fetch(`https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/contents/${encodeURIComponent(targetPath)}`, {
       method: "DELETE",
       headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json" },
       body: JSON.stringify({ message, sha, branch: branch || BRANCH })
@@ -162,11 +160,12 @@ app.delete("/contents/:path", requireApiKey, async (req, res) => {
 });
 
 // POST-Fallback zum Löschen
-app.post("/contents/:path/delete", requireApiKey, async (req, res) => {
+app.post("/contents/*/delete", requireApiKey, async (req, res) => {
   try {
+    const targetPath = req.params[0];
     const { message, sha, branch } = req.body || {};
     const token = await getInstallationToken();
-    const gh = await fetch(`https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/contents/${encodeURIComponent(req.params.path)}`, {
+    const gh = await fetch(`https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/contents/${encodeURIComponent(targetPath)}`, {
       method: "DELETE",
       headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json" },
       body: JSON.stringify({ message, sha, branch: branch || BRANCH })
