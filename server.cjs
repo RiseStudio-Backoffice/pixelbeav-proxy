@@ -177,13 +177,39 @@ app.post("/contents/*/delete", requireApiKey, async (req, res) => {
   }
 });
 
-// POST for Rules
-app.post("/api/applyRules", async (req, res) => {
-  const data = await getGitHubFile(req.body.path);
-  res.json({
-    allow_apply: true,
-    content: data.content,
-  });
+// ==========================================================
+// 🔽 Apply Rules Endpoint (sicherer Zugriff für GPT)
+// ==========================================================
+app.post("/api/applyRules", requireApiKey, async (req, res) => {
+  try {
+    const { path } = req.body;
+    if (!path) return res.status(400).json({ error: "Missing path" });
+
+    const token = await getInstallationToken();
+    const url = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/contents/${path}?ref=${BRANCH}`;
+
+    const response = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/vnd.github.v3.raw+json",
+        "User-Agent": "PixelBeav-Proxy"
+      }
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`GitHub API Fehler: ${response.status} ${response.statusText} :: ${text}`);
+    }
+
+    const data = await response.json();
+    res.json({
+      allow_apply: true,
+      content: data.content ?? null
+    });
+  } catch (err) {
+    console.error("❌ applyRules:", err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 const PORT = process.env.PORT || 10000;
