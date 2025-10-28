@@ -21,6 +21,7 @@
 const express = require("express");
 const jwt = require("jsonwebtoken");
 const path = require("path");
+const fs = require("fs");
 const fetch = (...a) => import("node-fetch").then(({ default: f }) => f(...a));
 
 try {
