@@ -203,6 +203,16 @@ app.put("/contents/:path(*)", requireApiKey, async (req, res) => {
   }
 });
 
+/**
+ * 🔒 Deprecated Endpoint
+ * DELETE /contents/:path
+ * 
+ * Diese Methode wurde aus Stabilitätsgründen deaktiviert.
+ * Verwende stattdessen POST /contents/:path/delete (siehe redirect unten).
+ * 
+ * Grund: DELETE-Bodies werden in manchen Umgebungen (Render, OpenAI Actions)
+ * nicht korrekt übermittelt, daher wurde POST als universelle Variante eingeführt.
+ */
 // ==========================================================
 // 🗑 DELETE – Delete File (Auto-SHA support)
 // ==========================================================
