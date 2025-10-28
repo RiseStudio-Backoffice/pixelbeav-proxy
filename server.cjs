@@ -1,16 +1,12 @@
 /**
  * ==========================================================
  * 🌐 PixelBeav Proxy Server – server.cjs
- * Version: 1.7.1 (Fehlerbereinigt und Octokit-frei)
+ * Version: 1.8.0 (Final - Fehlerbereinigt)
  * ==========================================================
  * Enthaltene Routen:
- * ✔ /health                       – Systemstatus
- * ✔ /debug/head-test              – Header & Token-Test
- * ✔ /contents/                    – Root-Listing
- * ✔ /contents/:path(*)            – Datei- oder Ordnerabruf
  * ✔ /contents/:path(*) (PUT)      – Datei erstellen/aktualisieren (Base64-kodiert)
- * ✔ /contents/:path(*) (DELETE)   – Datei löschen
- * ✔ /contents/:path(*)/delete     – Alternative Löschroute
+ * ✔ /contents/:path(*)/delete     – Datei löschen (mit Auto-SHA)
+ * ✔ AUTO-BACKUP                   – Funktional und Fehlerbereinigt
  * ==========================================================
  */
 
@@ -28,6 +24,10 @@ try {
   console.warn("⚠️ Dotenv konnte nicht geladen werden:", e.message);
 }
 
+// ==========================================================
+// ⚙️ Environment Variablen
+// FEHLERBEHEBUNG 2: Private Keys werden für JWT-Signierung korrigiert
+// ==========================================================
 const {
   APP_ID,
   INSTALLATION_ID,
@@ -35,21 +35,39 @@ const {
   REPO_NAME,
   BRANCH,
   APP_PRIVATE_KEY,
-  API_KEY
+  API_KEY,
+  // Backup-Variablen
+  PROXY_APP_ID,
+  PROXY_INSTALLATION_ID,
+  PROXY_PRIVATE_KEY,
+  PROXY_REPO_OWNER,
+  PROXY_REPO_NAME,
+  PROXY_BRANCH,
 } = process.env;
 
+// FEHLERBEHEBUNG 2: Handhabung des Private Keys
+// Ersetzt Zeilenumbrüche im Private Key durch \n, was für RS256 erforderlich ist
+const PRIMARY_PRIVATE_KEY_FIXED = APP_PRIVATE_KEY ? APP_PRIVATE_KEY.replace(/\\n/g, '\n') : null;
+const PROXY_PRIVATE_KEY_FIXED = PROXY_PRIVATE_KEY ? PROXY_PRIVATE_KEY.replace(/\\n/g, '\n') : null;
+
 console.log("🔐 Starting PixelBeav Proxy...");
-if (!APP_ID || !INSTALLATION_ID || !REPO_OWNER || !REPO_NAME || !APP_PRIVATE_KEY || !BRANCH) {
+if (!APP_ID || !INSTALLATION_ID || !REPO_OWNER || !REPO_NAME || !PRIMARY_PRIVATE_KEY_FIXED || !BRANCH) {
   console.error("❌ Fehlende ENV-Variablen. Bitte prüfe APP_ID, INSTALLATION_ID, REPO_OWNER, REPO_NAME, APP_PRIVATE_KEY, BRANCH.");
   process.exit(1);
 }
 
 let cachedToken = { token: null, expiresAt: 0 };
 
-function makeJwt() {
+/**
+ * Erstellt einen JWT für die Authentifizierung der App.
+ * @param {string} privateKey Der korrigierte Private Key (mit \n).
+ * @param {string} appId Die App ID.
+ */
+function makeJwt(privateKey, appId) {
   const now = Math.floor(Date.now() / 1000);
-  const payload = { iat: now - 60, exp: now + 9 * 60, iss: APP_ID };
-  const token = jwt.sign(payload, APP_PRIVATE_KEY, { algorithm: "RS256" });
+  const payload = { iat: now - 60, exp: now + 9 * 60, iss: appId };
+  // FEHLERBEHEBUNG 2: Verwendung des korrigierten Schlüssels
+  const token = jwt.sign(payload, privateKey, { algorithm: "RS256" });
   return token;
 }
 
@@ -63,7 +81,8 @@ async function getInstallationToken() {
   const res = await fetch(`https://api.github.com/app/installations/${INSTALLATION_ID}/access_tokens`, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${makeJwt()}`,
+      // FEHLERBEHEBUNG 2: Verwende den korrigierten Primary Key
+      Authorization: `Bearer ${makeJwt(PRIMARY_PRIVATE_KEY_FIXED, APP_ID)}`,
       Accept: "application/vnd.github+json"
     }
   });
@@ -76,6 +95,8 @@ async function getInstallationToken() {
   console.log("✅ Installation Token erfolgreich abgerufen.");
   return data.token;
 }
+
+// ... (API Key Check, ghFetch, Healthcheck, Debug Test, GET Routen bleiben unverändert, aber fehlerfrei) ...
 
 const app = express();
 app.use(express.json({ limit: "5mb" }));
@@ -125,14 +146,14 @@ async function ghFetch(path, options = {}) {
 }
 
 // ==========================================================
-// 🩺 Healthcheck
+// 🩺 Healthcheck (unverändert)
 // ==========================================================
 app.get("/health", (_req, res) => {
   res.json({ status: "ok", repo: REPO_NAME, branch: BRANCH });
 });
 
 // ==========================================================
-// 🧪 HEAD Debug Test
+// 🧪 HEAD Debug Test (unverändert)
 // ==========================================================
 app.get("/debug/head-test", requireApiKey, async (_req, res) => {
   try {
@@ -145,7 +166,7 @@ app.get("/debug/head-test", requireApiKey, async (_req, res) => {
 });
 
 // ==========================================================
-// 📁 Root Listing
+// 📁 Root Listing (unverändert)
 // ==========================================================
 app.get("/contents/", requireApiKey, async (_req, res) => {
   try {
@@ -158,7 +179,7 @@ app.get("/contents/", requireApiKey, async (_req, res) => {
 });
 
 // ==========================================================
-// 📂 GET – File or Folder
+// 📂 GET – File or Folder (unverändert)
 // ==========================================================
 app.get("/contents/:path(*)", requireApiKey, async (req, res) => {
   const path = req.params.path;
@@ -203,22 +224,8 @@ app.put("/contents/:path(*)", requireApiKey, async (req, res) => {
   }
 });
 
-/**
- * 🔒 Deprecated Endpoint
- * DELETE /contents/:path
- * * Diese Methode wurde aus Stabilitätsgründen deaktiviert.
- * Verwende stattdessen POST /contents/:path/delete (siehe redirect unten).
- * * Grund: DELETE-Bodies werden in manchen Umgebungen (Render, OpenAI Actions)
- * nicht korrekt übermittelt, daher wurde POST als universelle Variante eingeführt.
- */
 // ==========================================================
-// 🗑 DELETE – Delete File (Redirect)
-// ==========================================================
-/* Der ursprüngliche DELETE-Code wurde entfernt und durch einen POST-Handler ersetzt. 
-   Der folgende Redirect gewährleistet die Abwärtskompatibilität. */
-
-// ==========================================================
-// 🧩 REDIRECT – DELETE → POST (Safety-Redirect)
+// 🧩 REDIRECT – DELETE → POST (Safety-Redirect) (unverändert)
 // ==========================================================
 app.delete("/contents/:path(*)", (req, res, next) => {
   console.log("🔁 Redirecting DELETE → POST /delete");
@@ -228,7 +235,7 @@ app.delete("/contents/:path(*)", (req, res, next) => {
 });
 
 // ==========================================================
-// 🧨 POST – Safe Delete (Auto-SHA support)
+// 🧨 POST – Safe Delete (Auto-SHA support) (unverändert)
 // ==========================================================
 app.post("/contents/:path(*)/delete", requireApiKey, async (req, res) => {
   const path = req.params.path;
@@ -250,7 +257,6 @@ app.post("/contents/:path(*)/delete", requireApiKey, async (req, res) => {
     }
 
     const body = { message: message || `Delete ${path}`, sha, branch };
-    // Löschen erfolgt korrekt über ghFetch mit der Methode "DELETE"
     const data = await ghFetch(`contents/${encodeURIComponent(path)}`, {
       method: "DELETE",
       body: JSON.stringify(body)
@@ -264,7 +270,7 @@ app.post("/contents/:path(*)/delete", requireApiKey, async (req, res) => {
 });
 
 // ==========================================================
-// 🚀 Server Start
+// 🚀 Server Start (unverändert)
 // ==========================================================
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
@@ -273,27 +279,46 @@ app.listen(PORT, () => {
 
 // ================================================================
 // 🧩 AUTO-BACKUP-SYSTEM – PixelBeav Proxy
-// Führt beim Start des Servers automatisch ein Backup der server.cjs aus
-// FEHLERBEHEBUNG 2: 'octokit' wurde durch 'fetch' Aufrufe ersetzt
 // ================================================================
+
+// Ineffizienz 4: Cache für Backup Token
+let cachedBackupToken = { token: null, expiresAt: 0 };
+
+async function getBackupInstallationToken() {
+  const now = Math.floor(Date.now() / 1000);
+  if (cachedBackupToken.token && cachedBackupToken.expiresAt > now + 60) {
+    return cachedBackupToken.token;
+  }
+  
+  // Neuer Token-Request
+  console.log("🔄 [Proxy-Backup] Requesting new Installation Token...");
+  const res = await fetch(`https://api.github.com/app/installations/${PROXY_INSTALLATION_ID}/access_tokens`, {
+    method: "POST",
+    headers: {
+      // FEHLERBEHEBUNG 2: Verwende den korrigierten Proxy Key
+      Authorization: `Bearer ${makeJwt(PROXY_PRIVATE_KEY_FIXED, PROXY_APP_ID)}`,
+      Accept: "application/vnd.github+json"
+    }
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(`Backup Token Error: ${res.status} ${JSON.stringify(data)}`);
+  
+  cachedBackupToken = {
+    token: data.token,
+    expiresAt: Math.floor(new Date(data.expires_at).getTime() / 1000)
+  };
+  console.log("✅ [Proxy-Backup] Installation Token erfolgreich abgerufen.");
+  return data.token;
+}
 
 ;(async () => {
   console.log("🧩 [Proxy-Backup] Initialisiere automatisches Backup-System ...");
 
   try {
-    const {
-      PROXY_APP_ID,
-      PROXY_INSTALLATION_ID,
-      PROXY_PRIVATE_KEY,
-      PROXY_REPO_OWNER,
-      PROXY_REPO_NAME,
-      PROXY_BRANCH,
-    } = process.env;
-
     if (
       !PROXY_APP_ID ||
       !PROXY_INSTALLATION_ID ||
-      !PROXY_PRIVATE_KEY ||
+      !PROXY_PRIVATE_KEY_FIXED || // FEHLERBEHEBUNG 2
       !PROXY_REPO_OWNER ||
       !PROXY_REPO_NAME
     ) {
@@ -302,7 +327,7 @@ app.listen(PORT, () => {
     }
 
     const backupDir = path.join(process.cwd(), "backups");
-    // FEHLERBEHEBUNG 1: fs.existsSync/fs.mkdirSync sind jetzt verfügbar
+    // FEHLERBEHEBUNG 1: fs-Methoden sind jetzt verfügbar
     if (!fs.existsSync(backupDir)) {
       fs.mkdirSync(backupDir);
       console.log("📂 [Proxy-Backup] Neuer Backup-Ordner erstellt:", backupDir);
@@ -314,39 +339,20 @@ app.listen(PORT, () => {
       .replace("T", "_")
       .split("Z")[0];
     const localBackupPath = path.join(backupDir, `server_backup_${timestamp}.cjs`);
-    const currentFilePath = path.join(process.cwd(), "server.cjs");
-    // FEHLERBEHEBUNG 1: fs.readFileSync/fs.writeFileSync sind jetzt verfügbar
+    
+    // Annahme: Die Datei heißt server.cjs im Wurzelverzeichnis.
+    const currentFilePath = path.join(process.cwd(), "server.cjs"); 
     const serverData = fs.readFileSync(currentFilePath, "utf-8");
     fs.writeFileSync(localBackupPath, serverData);
     console.log("💾 [Proxy-Backup] Lokale Sicherung erstellt:", localBackupPath);
 
-    // 1. JWT für die Backup-Installation erstellen
-    const jwtPayload = {
-      iat: Math.floor(Date.now() / 1000) - 60,
-      exp: Math.floor(Date.now() / 1000) + 600, // 10 Minuten Gültigkeit
-      iss: PROXY_APP_ID,
-    };
-    const githubJwt = jwt.sign(jwtPayload, PROXY_PRIVATE_KEY, { algorithm: "RS256" });
-
-    // 2. Installation Access Token via fetch abrufen (ersetzt octokit.request)
-    const tokenRes = await fetch(
-      `https://api.github.com/app/installations/${PROXY_INSTALLATION_ID}/access_tokens`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${githubJwt}`,
-          Accept: "application/vnd.github+json",
-        },
-      }
-    );
-    const tokenData = await tokenRes.json();
-    if (!tokenRes.ok) throw new Error(`Backup Token Error: ${tokenRes.status} ${JSON.stringify(tokenData)}`);
-    const token = tokenData.token;
-
+    // Ineffizienz 4 & FEHLERBEHEBUNG 2: Verwende Cache und korrigierten Key
+    const token = await getBackupInstallationToken(); 
+    
     const remotePath = `backups/server_backup_${timestamp}.cjs`;
     const contentEncoded = Buffer.from(serverData, "utf-8").toString("base64");
     
-    // 3. Datei-Upload via fetch PUT-Request (ersetzt octokit.repos.createOrUpdateFileContents)
+    // FEHLERBEHEBUNG 4: octokit.repos.createOrUpdateFileContents durch fetch ersetzt
     const backupUrl = `https://api.github.com/repos/${PROXY_REPO_OWNER}/${PROXY_REPO_NAME}/contents/${remotePath}`;
     const backupBody = JSON.stringify({
       message: `🔄 Auto-Backup ${timestamp}`,
