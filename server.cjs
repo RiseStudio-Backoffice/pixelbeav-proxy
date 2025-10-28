@@ -91,7 +91,7 @@ async function getInstallationToken() {
 const fs = require("fs");
 const crypto = require("crypto");
 
-async function createRemoteBackup() {
+async function createRemoteBackup(token) {
   try {
     const currentFile = "./server.cjs";
     const current = fs.readFileSync(currentFile, "utf8");
@@ -146,7 +146,15 @@ async function createRemoteBackup() {
 }
 
 // 🔹 Beim Start automatisch ausführen
-createRemoteBackup();
+getInstallationToken()
+  .then(token => {
+    global.validGitHubToken = token;
+    console.log("[Proxy-Backup] Token erfolgreich abgerufen, Backup startet …");
+    return createRemoteBackup(token);
+  })
+  .catch(err => {
+    console.error("[Proxy-Backup] Token konnte nicht abgerufen werden:", err);
+  });
 
 const app = express();
 app.use(express.json({ limit: "5mb" }));
