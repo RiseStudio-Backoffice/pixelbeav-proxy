@@ -35,13 +35,13 @@ const {
   REPO_OWNER,
   REPO_NAME,
   BRANCH,
-  GH_APP_PRIVATE_KEY,
+  APP_PRIVATE_KEY,
   API_KEY
 } = process.env;
 
 console.log("🔐 Starting PixelBeav Proxy...");
-if (!APP_ID || !INSTALLATION_ID || !REPO_OWNER || !REPO_NAME || !GH_APP_PRIVATE_KEY || !BRANCH) {
-  console.error("❌ Fehlende ENV-Variablen. Bitte prüfe APP_ID, INSTALLATION_ID, REPO_OWNER, REPO_NAME, GH_APP_PRIVATE_KEY, BRANCH.");
+if (!APP_ID || !INSTALLATION_ID || !REPO_OWNER || !REPO_NAME || !APP_PRIVATE_KEY || !BRANCH) {
+  console.error("❌ Fehlende ENV-Variablen. Bitte prüfe APP_ID, INSTALLATION_ID, REPO_OWNER, REPO_NAME, APP_PRIVATE_KEY, BRANCH.");
   process.exit(1);
 }
 
@@ -50,7 +50,7 @@ let cachedToken = { token: null, expiresAt: 0 };
 function makeJwt() {
   const now = Math.floor(Date.now() / 1000);
   const payload = { iat: now - 60, exp: now + 9 * 60, iss: APP_ID };
-  const token = jwt.sign(payload, GH_APP_PRIVATE_KEY, { algorithm: "RS256" });
+  const token = jwt.sign(payload, APP_PRIVATE_KEY, { algorithm: "RS256" });
   return token;
 }
 
@@ -78,83 +78,6 @@ async function getInstallationToken() {
   console.log("✅ Installation Token erfolgreich abgerufen.");
   return data.token;
 }
-
-// ===============================================================
-// 🔸 AUTO-BACKUP-SYSTEM MIT GITHUB-UPLOAD (v1.9.4 – angepasst an PixelBeav Proxy)
-// ===============================================================
-//  Verwendet die bestehenden ENV-Konstanten aus dem oberen Block:
-//  APP_ID, INSTALLATION_ID, REPO_OWNER, REPO_NAME, GH_APP_PRIVATE_KEY, API_KEY.
-//  Erstellt pro Codeänderung eine Kopie der server.cjs im GitHub-Repository
-//  unter /backups/ und überspringt identische Versionen.
-// ===============================================================
-
-const fs = require("fs");
-const crypto = require("crypto");
-
-async function createRemoteBackup(token) {
-  try {
-    const currentFile = "./server.cjs";
-    const current = fs.readFileSync(currentFile, "utf8");
-    const currentSHA = crypto.createHash("sha1").update(current).digest("hex");
-
-    const shaFile = "./last_backup_sha.txt";
-    const lastSHA = fs.existsSync(shaFile)
-      ? fs.readFileSync(shaFile, "utf8").trim()
-      : null;
-
-    if (currentSHA === lastSHA) {
-      console.log("[Proxy-Backup] Kein Backup nötig (identische Version).");
-      return;
-    }
-
-    // 🔹 Backup-Dateiname mit Zeitstempel
-    const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-    const backupPath = `backups/server_backup_${timestamp}.cjs`;
-
-    // 🔹 Dateiinhalt Base64-kodieren
-    const encoded = Buffer.from(current, "utf8").toString("base64");
-
-    // 🔹 GitHub-API-Aufruf vorbereiten
-    const url = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/contents/${backupPath}`;
-    const body = JSON.stringify({
-      message: `Automatisches Backup von server.cjs (${timestamp})`,
-      content: encoded,
-    });
-
-    // 🔹 Fetch-Aufruf mit dem bereits global verfügbaren Token
-    const response = await fetch(url, {
-      method: "PUT",
-      headers: {
-        Authorization: `token ${API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body,
-    });
-
-    const data = await response.json();
-
-    if (response.ok) {
-      fs.writeFileSync(shaFile, currentSHA);
-      console.log(`[Proxy-Backup] Neues Backup erstellt: ${backupPath}`);
-      console.log(`[Proxy-Backup] Commit-SHA: ${data.commit?.sha || "(n/a)"}`);
-    } else {
-      console.error("[Proxy-Backup-Fehler] GitHub-Antwort:", data);
-    }
-  } catch (err) {
-    console.error("[Proxy-Backup-Fehler]", err);
-  }
-}
-
-// 🔹 Beim Start automatisch ausführen
-getInstallationToken()
-  .then(token => {
-    global.validGitHubToken = token;
-    console.log("[Proxy-Backup] Token erfolgreich abgerufen, Backup startet …");
-    return createRemoteBackup(token);
-  })
-  .catch(err => {
-    console.error("[Proxy-Backup] Token konnte nicht abgerufen werden:", err);
-  });
 
 const app = express();
 app.use(express.json({ limit: "5mb" }));
@@ -382,3 +305,80 @@ const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
   console.log(`🚀 PixelBeav Proxy läuft auf Port ${PORT}`);
 });
+// ================================================================
+// 🧩 AUTO-BACKUP-SYSTEM – PixelBeav Proxy
+// Führt beim Start des Servers automatisch ein Backup der server.cjs aus
+// Erstellt lokale Sicherung + Remote-Upload ins Proxy-Repository
+// ================================================================
+
+;(async () => {
+  console.log("🧩 [Proxy-Backup] Initialisiere automatisches Backup-System ...");
+
+  try {
+    const {
+      PROXY_APP_ID,
+      PROXY_INSTALLATION_ID,
+      PROXY_PRIVATE_KEY,
+      PROXY_REPO_OWNER,
+      PROXY_REPO_NAME,
+      PROXY_BRANCH,
+    } = process.env;
+
+    if (
+      !PROXY_APP_ID ||
+      !PROXY_INSTALLATION_ID ||
+      !PROXY_PRIVATE_KEY ||
+      !PROXY_REPO_OWNER ||
+      !PROXY_REPO_NAME
+    ) {
+      console.error("❌ [Proxy-Backup] Fehlende Proxy-Variablen. Backup abgebrochen.");
+      return;
+    }
+
+    const backupDir = path.join(process.cwd(), "backups");
+    if (!fs.existsSync(backupDir)) {
+      fs.mkdirSync(backupDir);
+      console.log("📂 [Proxy-Backup] Neuer Backup-Ordner erstellt:", backupDir);
+    }
+
+    const timestamp = new Date()
+      .toISOString()
+      .replace(/[:.]/g, "-")
+      .replace("T", "_")
+      .split("Z")[0];
+
+    const localBackupPath = path.join(backupDir, `server_backup_${timestamp}.cjs`);
+    const currentFilePath = path.join(process.cwd(), "server.cjs");
+    const serverData = fs.readFileSync(currentFilePath, "utf-8");
+    fs.writeFileSync(localBackupPath, serverData);
+    console.log("💾 [Proxy-Backup] Lokale Sicherung erstellt:", localBackupPath);
+
+    const payload = {
+      iat: Math.floor(Date.now() / 1000) - 60,
+      exp: Math.floor(Date.now() / 1000) + 600,
+      iss: PROXY_APP_ID,
+    };
+    const githubToken = jwt.sign(payload, PROXY_PRIVATE_KEY, { algorithm: "RS256" });
+
+    const { data: { token } } = await octokit.request(
+      `POST /app/installations/${PROXY_INSTALLATION_ID}/access_tokens`
+    );
+
+    const remotePath = `backups/server_backup_${timestamp}.cjs`;
+    const contentEncoded = Buffer.from(serverData, "utf-8").toString("base64");
+
+    await octokit.repos.createOrUpdateFileContents({
+      owner: PROXY_REPO_OWNER,
+      repo: PROXY_REPO_NAME,
+      path: remotePath,
+      message: `🔄 Auto-Backup ${timestamp}`,
+      content: contentEncoded,
+      branch: PROXY_BRANCH || "main",
+    });
+
+    console.log("✅ [Proxy-Backup] Backup erfolgreich ins Proxy-Repo hochgeladen.");
+
+  } catch (error) {
+    console.error("❌ [Proxy-Backup-Fehler]", error);
+  }
+})();
