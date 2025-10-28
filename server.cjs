@@ -45,66 +45,109 @@ if (!APP_ID || !INSTALLATION_ID || !REPO_OWNER || !REPO_NAME || !GH_APP_PRIVATE_
   process.exit(1);
 }
 // ===============================================================
-// 🟡 AUTO-BACKUP-SYSTEM MIT ZEITSTEMPEL + SHA-VERGLEICH (v1.8.0)
+// 🟡 AUTO-BACKUP-SYSTEM MIT GITHUB-UPLOAD (v1.9.0)
 // ===============================================================
 // Zweck:
-//  - Erstellt automatisch bei jeder neuen Serverversion ein Backup.
-//  - Speichert die Datei in /backups/server_backup_YYYY-MM-DD_HH-MM-SS.cjs.
-//  - Prüft den SHA1-Hash der aktuellen server.cjs, um identische Versionen
-//    zu erkennen und unnötige Backups zu vermeiden.
-//  - Voll kompatibel mit Render, benötigt keine Zusatzpakete.
-//
-// Einfügepunkt: direkt nach den require()-Zeilen (oberhalb deiner Express-Init).
+//  - Liest die aktuelle server.cjs-Datei im Render-Container ein
+//  - Wandelt sie in Base64 um
+//  - Prüft SHA1, um identische Versionen zu vermeiden
+//  - Lädt die Datei bei Änderungen direkt ins GitHub-Repo unter
+//      /backups/server_backup_YYYY-MM-DD_HH-MM-SS.cjs
+//  - Nutzt die bereits vorhandene GitHub-App-Authentifizierung
+//    (APP_ID, INSTALLATION_ID, PRIVATE_KEY) über getToken()
 // ===============================================================
 
 const fs = require("fs");
 const crypto = require("crypto");
+const fetch = require("node-fetch"); // bereits vorhanden in deinem Projekt
 
-try {
-  const backupDir = "./backups";
+// 🔹 Funktion, um die aktuelle Datei einzulesen und Backup ggf. zu erstellen
+async function createRemoteBackup() {
+  try {
+    const OWNER = "RiseStudio-Backoffice";
+    const REPO = "PixelBeav.App";
 
-  // Ordner anlegen, falls nicht vorhanden
-  if (!fs.existsSync(backupDir)) {
-    fs.mkdirSync(backupDir);
-    console.log("\x1b[33m[Proxy-Init] 🗂️ Backup-Ordner erstellt:\x1b[0m", backupDir);
-  }
+    // 🔹 Token von deiner bestehenden Auth-Funktion holen
+    const { createAppAuth } = require("@octokit/auth-app");
+    const APP_ID = process.env.GH_APP_ID;
+    const INSTALLATION_ID = process.env.GH_INSTALL_ID;
+    const PRIVATE_KEY = process.env.GH_PRIVATE_KEY;
 
-  // Inhalt der aktuellen server.cjs lesen
-  const currentFile = "./server.cjs";
-  const current = fs.readFileSync(currentFile, "utf8");
+    const auth = createAppAuth({
+      appId: APP_ID,
+      privateKey: PRIVATE_KEY,
+      installationId: INSTALLATION_ID,
+    });
+    const installationAuthentication = await auth({ type: "installation" });
+    const token = installationAuthentication.token;
 
-  // Hash (SHA1) der Datei berechnen
-  const currentSHA = crypto.createHash("sha1").update(current).digest("hex");
+    // 🔹 Dateiinhalt und Hash berechnen
+    const currentFile = "./server.cjs";
+    const current = fs.readFileSync(currentFile, "utf8");
+    const currentSHA = crypto.createHash("sha1").update(current).digest("hex");
 
-  // Datei mit dem letzten gespeicherten SHA lesen, falls vorhanden
-  const shaFile = `${backupDir}/last_sha.txt`;
-  const lastSHA = fs.existsSync(shaFile)
-    ? fs.readFileSync(shaFile, "utf8").trim()
-    : null;
+    // 🔹 Vergleichsdatei lokal speichern, um Doppel-Backups zu vermeiden
+    const shaFile = "./last_backup_sha.txt";
+    const lastSHA = fs.existsSync(shaFile)
+      ? fs.readFileSync(shaFile, "utf8").trim()
+      : null;
 
-  // Prüfen, ob sich der Inhalt geändert hat
-  if (currentSHA !== lastSHA) {
+    if (currentSHA === lastSHA) {
+      console.log(
+        "\x1b[32m[Proxy-Backup]\x1b[0m 🟢 Kein Backup nötig (identische Version erkannt)"
+      );
+      return;
+    }
+
+    // 🔹 Backup-Dateiname mit Zeitstempel
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-    const backupPath = `${backupDir}/server_backup_${timestamp}.cjs`;
+    const backupPath = `backups/server_backup_${timestamp}.cjs`;
 
-    // Backup-Datei erstellen
-    fs.copyFileSync(currentFile, backupPath);
+    // 🔹 Base64-kodierter Inhalt für GitHub-Upload
+    const encoded = Buffer.from(current, "utf8").toString("base64");
 
-    // Neuen Hash speichern
-    fs.writeFileSync(shaFile, currentSHA);
+    // 🔹 GitHub-API-Aufruf vorbereiten
+    const url = `https://api.github.com/repos/${OWNER}/${REPO}/contents/${backupPath}`;
+    const body = JSON.stringify({
+      message: `Automatisches Backup von server.cjs (${timestamp})`,
+      content: encoded,
+    });
 
-    console.log(
-      "\x1b[33m[Proxy-Init] 🟡 Neues Backup erstellt:\x1b[0m",
-      backupPath
-    );
-  } else {
-    console.log(
-      "\x1b[32m[Proxy-Init] 🟢 Kein Backup nötig (identische Version erkannt)\x1b[0m"
-    );
+    // 🔹 Datei hochladen
+    const response = await fetch(url, {
+      method: "PUT",
+      headers: {
+        Authorization: `token ${token}`,
+        "Content-Type": "application/json",
+      },
+      body,
+    });
+
+    const data = await response.json();
+
+    if (response.ok) {
+      fs.writeFileSync(shaFile, currentSHA);
+      console.log(
+        "\x1b[33m[Proxy-Backup]\x1b[0m 🟡 Neues Backup erfolgreich erstellt:",
+        backupPath
+      );
+      console.log(
+        "\x1b[36m[Proxy-Backup]\x1b[0m GitHub Commit-SHA:",
+        data.commit?.sha || "(unbekannt)"
+      );
+    } else {
+      console.error(
+        "\x1b[31m[Proxy-Backup-Fehler]\x1b[0m GitHub-Antwort:",
+        JSON.stringify(data, null, 2)
+      );
+    }
+  } catch (err) {
+    console.error("\x1b[31m[Proxy-Backup-Fehler]\x1b[0m", err);
   }
-} catch (err) {
-  console.error("\x1b[31m[Proxy-Init-Fehler]\x1b[0m", err);
 }
+
+// 🔹 Beim Start des Servers automatisch Backup prüfen und ggf. erstellen
+createRemoteBackup();
 
 let cachedToken = { token: null, expiresAt: 0 };
 
