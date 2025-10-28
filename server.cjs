@@ -243,32 +243,39 @@ async function getBackupInstallationToken() {
   return data.token;
 }
 
+/**
+ * **KORRIGIERTE Logik:** Ruft den Hash-Wert ab. Bei 404 (Datei nicht vorhanden) wird null/null zurückgegeben.
+ */
 async function getLatestRemoteHash(token) {
     const hashPath = 'backups/current_server_cjs_hash.txt';
     const url = `https://api.github.com/repos/${PROXY_REPO_OWNER}/${PROXY_REPO_NAME}/contents/${hashPath}`;
 
     try {
-        // 1. Abrufen des Inhalts (Hash-Wert)
-        const res = await fetch(url, {
-            headers: { Authorization: `token ${token}`, Accept: "application/vnd.github.v3.raw" }
-        });
-        if (res.status === 404) {
-            console.log("ℹ️ [Proxy-Backup] Keine vorherige Hash-Datei gefunden (404).");
-            return { hash: null, sha: null };
-        }
-        if (!res.ok) throw new Error(`Hash Fetch Error: ${res.status}`);
-        const remoteHash = await res.text();
-
-        // 2. Abrufen der Metadaten (SHA) für die spätere Aktualisierung
+        // 1. Abrufen der Metadaten (SHA) für die spätere Aktualisierung
         const metaRes = await fetch(url, {
              headers: { Authorization: `token ${token}`, Accept: "application/vnd.github+json" }
         });
-        const metaData = await metaRes.json();
         
+        if (metaRes.status === 404) {
+            console.log("ℹ️ [Proxy-Backup] Keine vorherige Hash-Datei gefunden (404).");
+            return { hash: null, sha: null };
+        }
+        if (!metaRes.ok) throw new Error(`Hash Meta Fetch Error: ${metaRes.status}`);
+        
+        const metaData = await metaRes.json();
+
+        // 2. Abrufen des Inhalts (Hash-Wert)
+        const contentRes = await fetch(url, {
+            headers: { Authorization: `token ${token}`, Accept: "application/vnd.github.v3.raw" }
+        });
+        
+        if (!contentRes.ok) throw new Error(`Hash Content Fetch Error: ${contentRes.status}`);
+        const remoteHash = await contentRes.text();
+
         return { hash: remoteHash.trim(), sha: metaData.sha };
         
     } catch (error) {
-        // Bei Fehler im Hash-Prozess (z.B. falsche Kodierung oder Timeouts) versuchen wir es beim nächsten Mal erneut.
+        // Bei jedem Fehler im Hash-Prozess (Timeout, etc.) wird der Backup-Prozess neu gestartet
         console.warn("⚠️ [Proxy-Backup] Fehler beim Abrufen/Verarbeiten des Remote-Hash:", error.message);
         return { hash: null, sha: null }; 
     }
@@ -344,12 +351,15 @@ async function getLatestRemoteHash(token) {
     const hashPath = 'backups/current_server_cjs_hash.txt';
     const hashUpdateUrl = `https://api.github.com/repos/${PROXY_REPO_OWNER}/${PROXY_REPO_NAME}/contents/${hashPath}`;
     
-    // Body-Objekt erstellen und SHA nur bei Update hinzufügen
+    // Body-Objekt erstellen
     const hashUpdateObject = {
         message: `🤖 Update server.cjs hash to ${currentFileHash.substring(0, 10)}`,
         content: Buffer.from(currentFileHash, "utf-8").toString("base64"),
         branch: PROXY_BRANCH || "main",
     };
+    
+    // **FIX:** Der SHA wird NUR hinzugefügt, wenn wir ihn von GitHub beim Abruf erhalten haben. 
+    // Wenn er NULL ist (404-Fall), wird er weggelassen, wodurch der PUT-Call die Datei erstellt (Status 201).
     if (remoteHashSha) {
         hashUpdateObject.sha = remoteHashSha;
     }
@@ -357,7 +367,7 @@ async function getLatestRemoteHash(token) {
 
 
     const hashUpdateRes = await fetch(hashUpdateUrl, {
-        method: "PUT", // Muss PUT sein für create/update file contents API
+        method: "PUT", 
         headers: { Authorization: `token ${token}`, Accept: "application/vnd.github+json", "Content-Type": "application/json" },
         body: hashUpdateBody,
     });
@@ -365,6 +375,8 @@ async function getLatestRemoteHash(token) {
     if (!hashUpdateRes.ok) {
         const errorData = await hashUpdateRes.json();
         console.error("⚠️ [Proxy-Backup] Hash-Update fehlgeschlagen:", errorData);
+        // ACHTUNG: Der 404-Fehler wird hier als fatal protokolliert, aber die Haupt-App läuft weiter.
+        // Der nächste Lauf wird versuchen, das Hash-File erneut zu erstellen.
         throw new Error(`Hash Update Error: ${hashUpdateRes.status} ${JSON.stringify(errorData)}`); 
     }
     console.log("✅ [Proxy-Backup] Hash-Datei erfolgreich aktualisiert. Nächster Lauf wird übersprungen, falls keine Änderung.");
