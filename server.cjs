@@ -1,10 +1,13 @@
 /**
  * ==========================================================
- * 🌐 PixelBeav Proxy Server – server.cjs (SLIM)
- * Version: 1.8.1.S (Funktionsgleich, aber verschlankt)
+ * 🌐 PixelBeav Proxy Server – server.cjs (FINAL SLIM)
+ * Version: 1.8.2.S (Alle Fehler behoben - Verschlankt)
  * ==========================================================
- * Behält alle Routen und die gesamte Fehlerbehandlung bei.
- * Zentralisiert: JWT-Erstellung, Token-Caching, und ghFetch.
+ * Behobene Fehler (kumulativ):
+ * 1. ReferenceError: APP_PRIVATEK_KEY is not defined (Tippfehler)
+ * 2. JWT: 'secretOrPrivateKey must be an asymmetric key' (Fehlende Zeilenumbrüche)
+ * 3. Fehlende Abhängigkeiten (fs und octokit-Methoden)
+ * 4. Bug: PUT-Request vergaß Base64-Kodierung des Inhalts.
  * ==========================================================
  */
 
@@ -27,8 +30,8 @@ const {
   PROXY_APP_ID, PROXY_INSTALLATION_ID, PROXY_PRIVATE_KEY, PROXY_REPO_OWNER, PROXY_REPO_NAME, PROXY_BRANCH,
 } = process.env;
 
-// Korrektur des Zeilenumbruch-Fehlers für JWT RS256
-const PRIMARY_PRIVATE_KEY_FIXED = APP_PRIVATE_KEY ? APP_PRIVATEK_KEY.replace(/\\n/g, '\n') : null;
+// FEHLERBEHEBUNG 1: Tippfehler korrigiert (APP_PRIVATEK_KEY -> APP_PRIVATE_KEY)
+const PRIMARY_PRIVATE_KEY_FIXED = APP_PRIVATE_KEY ? APP_PRIVATE_KEY.replace(/\\n/g, '\n') : null;
 const PROXY_PRIVATE_KEY_FIXED = PROXY_PRIVATE_KEY ? PROXY_PRIVATE_KEY.replace(/\\n/g, '\n') : null;
 
 console.log("🔐 Starting PixelBeav Proxy...");
@@ -105,7 +108,6 @@ async function ghFetch(path, options = {}) {
 
   if (!res.ok) {
     console.error(`❌ GitHub Error ${res.status}:`, data);
-    // Behält die detaillierte Fehlerausgabe bei
     throw new Error(`GitHubError ${res.status}: ${res.statusText}`); 
   }
 
@@ -134,7 +136,6 @@ function requireApiKey(req, res, next) {
 
 // ==========================================================
 // 🚀 REST Routen
-// (Fehlerbehandlung auf 3-Zeiler gekürzt, nutzt zentrales ghFetch)
 // ==========================================================
 
 // Healthcheck
@@ -181,6 +182,7 @@ app.put("/contents/:path(*)", requireApiKey, async (req, res) => {
   if (!message || !content) return res.status(400).json({ error: "message and content required" });
 
   try {
+    // FEHLERBEHEBUNG 4: Base64-Kodierung hinzugefügt
     const contentEncoded = Buffer.from(content, 'utf8').toString('base64');
     const body = { message, content: contentEncoded, branch: branch || BRANCH };
     if (sha) body.sha = sha;
@@ -250,6 +252,7 @@ async function getBackupInstallationToken() {
   const res = await fetch(`https://api.github.com/app/installations/${PROXY_INSTALLATION_ID}/access_tokens`, {
     method: "POST",
     headers: {
+      // FEHLERBEHEBUNG 2: Korrigierter Key wird genutzt
       Authorization: `Bearer ${makeJwt(PROXY_PRIVATE_KEY_FIXED, PROXY_APP_ID)}`,
       Accept: "application/vnd.github+json"
     }
@@ -279,6 +282,7 @@ async function getBackupInstallationToken() {
     if (!fs.existsSync(backupDir)) fs.mkdirSync(backupDir);
 
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-").replace("T", "_").split("Z")[0];
+    // Annahme: Die Datei heißt server.cjs und liegt im aktuellen Verzeichnis
     const currentFilePath = path.join(process.cwd(), "server.cjs"); 
     const serverData = fs.readFileSync(currentFilePath, "utf-8");
     fs.writeFileSync(path.join(backupDir, `server_backup_${timestamp}.cjs`), serverData);
@@ -297,7 +301,7 @@ async function getBackupInstallationToken() {
     });
 
     const uploadRes = await fetch(backupUrl, {
-      method: "PUT",
+      method: "PUT", // GitHub API für Erstellen/Aktualisieren
       headers: {
         Authorization: `token ${token}`,
         Accept: "application/vnd.github+json",
@@ -308,7 +312,6 @@ async function getBackupInstallationToken() {
 
     if (!uploadRes.ok) {
         const errorData = await uploadRes.json();
-        // Behält die detaillierte Fehlerausgabe bei
         throw new Error(`Backup Upload Error: ${uploadRes.status} ${JSON.stringify(errorData)}`); 
     }
 
