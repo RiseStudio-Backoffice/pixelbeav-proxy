@@ -206,6 +206,7 @@ app.put("/contents/:path(*)", requireApiKey, async (req, res) => {
 // ==========================================================
 // 🗑 DELETE – Delete File (Auto-SHA support)
 // ==========================================================
+/*
 app.delete("/contents/:path(*)", requireApiKey, async (req, res) => {
   const path = req.params.path;
   let { message, sha, branch } = req.body;
@@ -238,6 +239,17 @@ app.delete("/contents/:path(*)", requireApiKey, async (req, res) => {
     console.error("❌ DELETE fehlgeschlagen:", e.message);
     res.status(500).json({ error: e.message });
   }
+});
+*/
+
+// ==========================================================
+// 🧩 REDIRECT – DELETE → POST (Safety-Redirect)
+// ==========================================================
+app.delete("/contents/:path(*)", (req, res, next) => {
+  console.log("🔁 Redirecting DELETE → POST /delete");
+  req.url = `/contents/${req.params.path}/delete`;
+  req.method = "POST";
+  app.handle(req, res, next);
 });
 
 // ==========================================================
