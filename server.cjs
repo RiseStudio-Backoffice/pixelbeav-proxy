@@ -1,7 +1,7 @@
 /**
  * ==========================================================
  * 🌐 PixelBeav Proxy Server – server.cjs (ENDGÜLTIG)
- * Version: 1.9.0.C (Feature: Automatische Backup-Bereinigung)
+ * Version: 1.9.1.F (Fix: Entfernung der doppelten Base64-Kodierung)
  * ==========================================================
  * Enthält folgende Routen/Funktionen:
  * * 🛠️ CORE ROUTEN
@@ -10,14 +10,14 @@
  * * 📂 GITHUB CRUD-ROUTEN (Mit API-Key Schutz)
  * ✔ /contents/                    – Root-Listing (GET)
  * ✔ /contents/:path(*)            – Datei/Ordner abrufen (GET)
- * ✔ /contents/:path(*) (PUT)      – Datei erstellen/aktualisieren (SHA optional, **Base64-Handling**)
+ * ✔ /contents/:path(*) (PUT)      – Datei erstellen/aktualisieren (SHA optional)
  * ✔ /contents/:path(*) (DELETE)   – Datei löschen (Benötigt SHA)
  * ✔ /contents/:path(*)/delete     – Alternative Löschroute (POST, findet SHA)
  * * 🔒 SICHERHEIT & ABSICHERUNG
  * ✔ Aggressive Key-Normalisierung gegen Leerzeichen & Doppel-Header
  * ✔ Bedingtes Auto-Backup (nur bei Dateiänderung, mit Hash-Prüfung)
  * ✔ Korrekter CET/CEST-Zeitstempel für Backups
- * ✔ NEU: Automatische Bereinigung alter Backups (max. 3 behalten)
+ * ✔ Automatische Bereinigung alter Backups (max. 3 behalten)
  * ==========================================================
  */
 
@@ -161,8 +161,8 @@ app.get("/contents/:path(*)", requireApiKey, async (req, res) => {
 });
 app.put("/contents/:path(*)", requireApiKey, async (req, res) => {
   const { path: filePath } = req.params;
-  // NEU: is_base64_encoded Flag hinzugefügt, um die Quelle zu kennzeichnen
-  const { message, content, branch, sha, is_base64_encoded } = req.body; 
+  // Entfernt: is_base64_encoded, da der Proxy IMMER Base64-Encodierung erwartet.
+  const { message, content, branch, sha } = req.body; 
   if (!message || !content) return res.status(400).json({ error: "message and content required" });
 
   try {
@@ -187,19 +187,10 @@ app.put("/contents/:path(*)", requireApiKey, async (req, res) => {
       }
     }
     
-    let contentEncoded;
-
-    // PRÜFUNG: Wenn is_base64_encoded = true, wird der Inhalt direkt verwendet.
-    if (is_base64_encoded === true) {
-        console.log("ℹ️ Content ist bereits Base64, wird direkt verwendet.");
-     
-    contentEncoded = content;
-    } else {
-        // Andernfalls (Standardfall: Rohdaten), wird er neu in Base64 encodiert.
-        console.log("ℹ️ Content ist Rohdaten, wird in Base64 encodiert.");
-        // Wir encodieren immer von UTF-8 zu Base64
-        contentEncoded = Buffer.from(content, 'utf8').toString('base64');
-    }
+    // ⚠️ VEREINFACHTE LOGIK: Es wird IMMER angenommen, dass 'content' Rohdaten (Text/JSON) sind.
+    // Sollte der Client (GPT) Base64-kodierten Inhalt senden, MUSS er diesen zuerst dekodieren.
+    console.log("ℹ️ Content wird als Rohdaten behandelt und in Base64 encodiert.");
+    const contentEncoded = Buffer.from(content, 'utf8').toString('base64');
     
     const body = { message, content: contentEncoded, branch: branch ||
 BRANCH };
