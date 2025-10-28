@@ -1,387 +1,295 @@
+/**
+ * ==========================================================
+ * 🌐 PixelBeav Proxy Server – server.cjs
+ * Version: 1.6.0 (vollständig bereinigt & erweitert)
+ * ==========================================================
+ * Enthaltene Routen:
+ *   ✔ /health                       – Systemstatus
+ *   ✔ /debug/head-test              – Header & Token-Test
+ *   ✔ /contents/                    – Root-Listing
+ *   ✔ /contents/:path(*)            – Datei- oder Ordnerabruf
+ *   ✔ /contents/:path(*) (PUT)      – Datei erstellen/aktualisieren
+ *   ✔ /contents/:path(*) (DELETE)   – Datei löschen
+ *   ✔ /contents/:path(*)/delete     – Alternative Löschroute
+ *
+ * Entfernt:
+ *   ✖ /contents/rules_gpt/          – Alte GPT-Hilfsroute (nicht mehr benötigt)
+ * ==========================================================
+ */
+
 const express = require("express");
 const jwt = require("jsonwebtoken");
 const fetch = (...a) => import("node-fetch").then(({ default: f }) => f(...a));
-try { require("dotenv").config(); console.log("✅ Dotenv geladen."); } catch (e) { console.warn("⚠️ Dotenv nicht verfügbar oder Fehler:", e.message); }
 
-console.log("🔐 SERVER START");
-console.log("🔑 API_KEY:", process.env.API_KEY ?? "[NICHT GESETZT]");
-const {
-  APP_ID, INSTALLATION_ID, REPO_OWNER, REPO_NAME, BRANCH,
-  GH_APP_PRIVATE_KEY, API_KEY
-} = process.env;
-
-// Überprüfung auf BRANCH hinzufügen, auch wenn "main" der Standard ist
-if (!APP_ID || !INSTALLATION_ID || !REPO_OWNER || !REPO_NAME || !GH_APP_PRIVATE_KEY || !BRANCH) {
-  console.error("[boot] ❌ Fehlende ENV-Variablen! APP_ID, INSTALLATION_ID, REPO_OWNER, REPO_NAME, GH_APP_PRIVATE_KEY und BRANCH sind erforderlich.");
-  process.exit(1);
-} else {
-    console.log(`✅ Alle erforderlichen ENV-Variablen vorhanden. Branch: ${BRANCH}`);
+try {
+  require("dotenv").config();
+  console.log("✅ Dotenv geladen.");
+} catch (e) {
+  console.warn("⚠️ Dotenv konnte nicht geladen werden:", e.message);
 }
 
+console.log("🔐 SERVER START");
+const {
+  APP_ID,
+  INSTALLATION_ID,
+  REPO_OWNER,
+  REPO_NAME,
+  BRANCH,
+  GH_APP_PRIVATE_KEY,
+  API_KEY
+} = process.env;
 
 // ==========================================================
-// 1. TOKEN CACHING IMPLEMENTIERUNG
+// 🧩 Initiale Prüfung
 // ==========================================================
-let cachedToken = {
-    token: null,
-    expiresAt: 0 // Unix-Timestamp in Sekunden
-};
+if (!APP_ID || !INSTALLATION_ID || !REPO_OWNER || !REPO_NAME || !GH_APP_PRIVATE_KEY || !BRANCH) {
+  console.error("❌ Fehlende ENV-Variablen! APP_ID, INSTALLATION_ID, REPO_OWNER, REPO_NAME, GH_APP_PRIVATE_KEY und BRANCH erforderlich.");
+  process.exit(1);
+} else {
+  console.log(`✅ ENV-Check bestanden – Repository: ${REPO_OWNER}/${REPO_NAME} | Branch: ${BRANCH}`);
+}
+
+// ==========================================================
+// 🔑 Tokenmanagement (JWT + Installation Token)
+// ==========================================================
+let cachedToken = { token: null, expiresAt: 0 };
 
 function makeJwt() {
   const now = Math.floor(Date.now() / 1000);
-  const token = jwt.sign({ iat: now - 60, exp: now + 9 * 60, iss: APP_ID }, GH_APP_PRIVATE_KEY, {
-    algorithm: "RS256"
-  });
-  console.log("✅ JWT für App-Authentifizierung erstellt.");
+  const payload = { iat: now - 60, exp: now + 9 * 60, iss: APP_ID };
+  const token = jwt.sign(payload, GH_APP_PRIVATE_KEY, { algorithm: "RS256" });
+  console.log("🔏 JWT erzeugt:", new Date(now * 1000).toISOString());
   return token;
 }
 
 async function getInstallationToken() {
   const now = Math.floor(Date.now() / 1000);
-  // Prüfe, ob das gecachte Token noch mindestens 60 Sekunden gültig ist
   if (cachedToken.token && cachedToken.expiresAt > now + 60) {
-      console.log("✅ Verwende gecachten Installation Token.");
-      return cachedToken.token;
+    console.log("🔁 Verwende gecachten Installation Token (gültig bis):", new Date(cachedToken.expiresAt * 1000).toISOString());
+    return cachedToken.token;
   }
-  
-  const url = `https://api.github.com/app/installations/${INSTALLATION_ID}/access_tokens`;
-  console.log("🚨 API Request URL: ", url);
-  try {
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${makeJwt()}`, Accept: "application/vnd.github+json" }
-    });
-    
-    const responseData = await res.json();
-    
-    if (!res.ok) {
-      const errorText = JSON.stringify(responseData);
-      console.error(`❌ getInstallationToken-Fehler: ${res.status} ${res.statusText} :: ${errorText}`);
-      throw new Error(`getInstallationToken: ${res.status} ${res.statusText} :: ${errorText}`);
+
+  console.log("🌍 Fordere neuen Installation Token von GitHub an...");
+  const res = await fetch(`https://api.github.com/app/installations/${INSTALLATION_ID}/access_tokens`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${makeJwt()}`,
+      Accept: "application/vnd.github+json"
     }
-    
-    const { token, expires_at } = responseData;
-    // Die GitHub-API gibt 'expires_at' als ISO 8601 String zurück
-    const expiresAt = Math.floor(new Date(expires_at).getTime() / 1000); 
-    cachedToken = { token: token, expiresAt: expiresAt };
-    console.log("✅ Installation Token erfolgreich abgerufen und gecacht. Läuft ab:", new Date(expiresAt * 1000).toISOString());
-    return token;
-  } catch (e) {
-    console.error("❌ Fehler beim Abrufen des Installation Tokens:", e.message);
-    throw e;
+  });
+
+  const data = await res.json();
+  if (!res.ok) {
+    console.error("❌ Fehler beim Tokenabruf:", data);
+    throw new Error(`TokenError: ${res.status} ${res.statusText}`);
   }
+
+  cachedToken = {
+    token: data.token,
+    expiresAt: Math.floor(new Date(data.expires_at).getTime() / 1000)
+  };
+
+  console.log("✅ Neuer Installation Token abgerufen:", new Date(cachedToken.expiresAt * 1000).toISOString());
+  return data.token;
 }
+
+// ==========================================================
+// 🧱 Middleware & App-Setup
+// ==========================================================
+const app = express();
+app.use(express.json({ limit: "5mb" }));
+
+app.use((req, res, next) => {
+  console.log(`[REQ] ${req.method} ${req.url} | Body: ${JSON.stringify(req.body || {})}`);
+  next();
+});
 
 function requireApiKey(req, res, next) {
-  const clientKey = req.query.apiKey || req.headers["x-api-key"];
-  console.log("🛂 Angegebener API-Key:", clientKey);
-  console.log("🗝️ Erwarteter API-Key:", API_KEY ?? "[nicht gesetzt]");
-  if (!API_KEY || clientKey !== API_KEY) {
-    console.log("❌ API-Key stimmt NICHT überein! Zugriff verweigert.");
-    return res.status(401).json({ error: "unauthorized" });
+  const key = req.query.apiKey || req.headers["x-api-key"];
+  if (!API_KEY || key !== API_KEY) {
+    console.error("❌ Ungültiger oder fehlender API-Key:", key);
+    return res.status(401).json({ error: "unauthorized", message: "API-Key ungültig" });
   }
-  console.log("✅ API-Key akzeptiert.");
+  console.log("🛡️ API-Key validiert.");
   next();
 }
 
-const app = express();
-app.use(express.json({ limit: "2mb" }));
-app.use((req, _res, next) => {
-  console.log(`[req] ${req.method} ${req.url}`);
-  next();
-});
-
-
 // ==========================================================
-// HILFSFUNKTIONEN
+// 🔧 Helper: GitHub API Call
 // ==========================================================
+async function ghFetch(path, options = {}) {
+  const token = await getInstallationToken();
+  const url = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/${path}`;
+  console.log("🌐 GitHub Request:", options.method || "GET", url);
 
-// Funktion zur robusteren Fehlerbehandlung bei GitHub-Responses
-async function handleGitHubResponse(gh) {
-    const text = await gh.text();
-    let data;
-    try {
-        data = JSON.parse(text);
-    } catch {
-        // Wenn kein JSON, den rohen Text als 'raw' zurückgeben
-        data = { raw: text, message: `GitHub returned non-JSON data with status ${gh.status}` };
+  const res = await fetch(url, {
+    ...options,
+    headers: {
+      Authorization: `token ${token}`,
+      Accept: "application/vnd.github+json",
+      "Content-Type": "application/json",
+      ...(options.headers || {})
     }
-    return { data, text };
+  });
+
+  const text = await res.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    data = { raw: text };
+  }
+
+  if (!res.ok) {
+    console.error(`❌ GitHub Fehler (${res.status}):`, data);
+    throw new Error(`GitHubError ${res.status} ${res.statusText}`);
+  }
+
+  console.log(`✅ GitHub OK (${res.status}) →`, Array.isArray(data) ? `[${data.length} Elemente]` : data.name || "Objekt");
+  return data;
 }
 
-
 // ==========================================================
-// ENDPUNKTE
+// 💓 HEALTH-CHECK
 // ==========================================================
-
-// Health check
 app.get("/health", (_req, res) => {
-    console.log("✅ Health Check erfolgreich.");
-    res.status(200).send("ok");
+  console.log("💓 Health-Check ausgeführt");
+  res.status(200).json({ status: "ok", repo: REPO_NAME, branch: BRANCH });
 });
 
-// HEAD-Test gegen GitHub-Datei (Debugging-Endpunkt beibehalten)
+// ==========================================================
+// 🧪 DEBUG: HEAD-Test
+// ==========================================================
 app.get("/debug/head-test", requireApiKey, async (_req, res) => {
-  console.log("▶️ Starte /debug/head-test");
+  console.log("🧪 HEAD-Test gestartet...");
   try {
-    const token = await getInstallationToken();
-    const ghUrl = "https://api.github.com/repos/RiseStudio-Backoffice/PixelBeav.App/contents/rules_gpt/repo-interaktion-rules.json";
-    const gh = await fetch(ghUrl, {
-      method: "HEAD",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: "application/vnd.github+json"
-      }
-    });
-    console.log(`✅ GitHub HEAD response: ${gh.status} ${gh.statusText}`);
-    res.status(gh.status).send(`GitHub HEAD response: ${gh.status}`);
+    const data = await ghFetch("git/refs/heads/" + BRANCH);
+    res.status(200).json({ head: data.object.sha });
   } catch (e) {
-    console.error("❌ HEAD failed:", e.message);
-    res.status(500).send("HEAD failed: " + e.message);
+    console.error("❌ HEAD-Test fehlgeschlagen:", e.message);
+    res.status(500).json({ error: e.message });
   }
 });
 
-// Root-Inhalt abfragen (Ordnerinhalte)
+// ==========================================================
+// 📜 ROOT: Inhalte im Repo-Root
+// ==========================================================
 app.get("/contents/", requireApiKey, async (_req, res) => {
-  console.log("▶️ Starte GET /contents/");
+  console.log("📁 Root-Listing angefordert");
   try {
-    const token = await getInstallationToken();
-    const ghUrl = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/contents/?ref=${BRANCH}`;
-    const gh = await fetch(ghUrl, {
-      headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json" }
-    });
-    
-    const { data, text } = await handleGitHubResponse(gh);
-    
-    if (!gh.ok) {
-        console.error(`❌ GitHub GET /contents/ Fehler: ${gh.status} ${gh.statusText} :: ${text}`);
-    } else {
-        console.log(`✅ GitHub GET /contents/ erfolgreich: ${gh.status}`);
-    }
-    res.status(gh.status).json(data);
+    const data = await ghFetch("contents");
+    res.status(200).json(data);
   } catch (e) {
-    console.error("❌ GET /contents/ Fehler:", e.message);
-    res.status(500).json({ error: String(e) });
+    console.error("❌ Root-Listing fehlgeschlagen:", e.message);
+    res.status(500).json({ error: e.message });
   }
 });
 
-// Root-Inhalt abfragen (Ordnerinhalte)
-app.get("/contents/rules_gpt/", requireApiKey, async (_req, res) => {
-  console.log("▶️ Starte GET /contents/rules_gpt");
+// ==========================================================
+// 📂 GET /contents/:path(*) – Datei oder Ordner
+// ==========================================================
+app.get("/contents/:path(*)", requireApiKey, async (req, res) => {
+  const path = req.params.path;
+  console.log("📂 GET Request für:", path);
+
   try {
-    const token = await getInstallationToken();
-    const ghUrl = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/contents/rules_gpt?ref=${BRANCH}`;
-    const gh = await fetch(ghUrl, {
-      headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json" }
-    });
-    
-    const { data, text } = await handleGitHubResponse(gh);
-    
-    if (!gh.ok) {
-        console.error(`❌ GitHub GET /contents/rules_gpt Fehler: ${gh.status} ${gh.statusText} :: ${text}`);
-    } else {
-        console.log(`✅ GitHub GET /contents/rules_gpt erfolgreich: ${gh.status}`);
+    const data = await ghFetch(`contents/${encodeURIComponent(path)}`);
+    if (Array.isArray(data)) {
+      console.log(`📁 Ordner erkannt (${data.length} Elemente):`, path);
+      return res.status(200).json({
+        type: "dir",
+        path,
+        entries: data
+      });
     }
-    res.status(gh.status).json(data);
+    console.log("📄 Datei erkannt:", data.name);
+    res.status(200).json({ type: "file", ...data });
   } catch (e) {
-    console.error("❌ GET /contents/rules_gpt Fehler:", e.message);
-    res.status(500).json({ error: String(e) });
+    console.error("❌ Fehler beim Abruf von", path, "→", e.message);
+    res.status(500).json({ error: e.message });
   }
 });
 
-// GET mit verschachteltem Pfad
-// 2. RAW-Content-Support durch Query-Parameter 'raw' (z.B. ?raw=true)
-app.get("/contents/*", requireApiKey, async (req, res) => {
-  const path = req.params[0];
-  const { raw } = req.query; // Query-Parameter für RAW-Modus
-  console.log("▶️ Starte GET /contents/*");
-  console.log("📁 Zielpfad (GET):", path, raw ? "(RAW-Format)" : "(JSON-Format/Metadaten)");
-  
+// ==========================================================
+// ✏️ PUT /contents/:path(*) – Datei erstellen/aktualisieren
+// ==========================================================
+app.put("/contents/:path(*)", requireApiKey, async (req, res) => {
+  const path = req.params.path;
+  const { message, content, branch, sha } = req.body;
+  console.log("✏️ PUT Request:", path, "| SHA:", sha);
+
+  if (!message || !content)
+    return res.status(400).json({ error: "message und content erforderlich" });
+
   try {
-    const token = await getInstallationToken();
-    // Branch explizit angeben
-    const ghUrl = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/contents/${encodeURIComponent(path)}?ref=${BRANCH}`;
-    
-    // Setze den Accept-Header basierend auf dem 'raw' Query-Parameter
-    const acceptHeader = raw 
-      ? "application/vnd.github.v3.raw" 
-      : "application/vnd.github+json";
+    const body = { message, content, branch: branch || BRANCH };
+    if (sha) body.sha = sha;
 
-    const gh = await fetch(ghUrl, {
-      headers: { 
-          Authorization: `Bearer ${token}`, 
-          Accept: acceptHeader,
-          'User-Agent': 'PixelBeav-Proxy' // User-Agent für GitHub-Best-Practice
-      }
-    });
-    
-    if (raw) {
-        // Bei RAW-Anfragen den Text direkt senden
-        const rawContent = await gh.text();
-        if (!gh.ok) {
-             console.error(`❌ GitHub GET /contents/${path} Fehler (RAW): ${gh.status} ${gh.statusText}`);
-             // Bei RAW-Fehlern oft nur der reine Fehlermessage-Text von GitHub
-             return res.status(gh.status).send(rawContent || gh.statusText);
-        }
-        console.log(`✅ GitHub GET /contents/${path} erfolgreich (RAW): ${gh.status}`);
-        res.status(gh.status).send(rawContent);
-        return;
-    }
-
-    // Standard-JSON-Response (Metadaten + Base64)
-    const { data, text } = await handleGitHubResponse(gh);
-    
-    if (!gh.ok) {
-        console.error(`❌ GitHub GET /contents/${path} Fehler: ${gh.status} ${gh.statusText} :: ${text}`);
-    } else {
-        console.log(`✅ GitHub GET /contents/${path} erfolgreich: ${gh.status}`);
-    }
-    res.status(gh.status).json(data);
-    
-  } catch (e) {
-    console.error(`❌ GET /contents/${path} Fehler:`, e.message);
-    res.status(500).json({ error: String(e) });
-  }
-});
-
-
-// PUT mit verschachteltem Pfad (Erstellen/Überschreiben)
-app.put("/contents/*", requireApiKey, async (req, res) => {
-  const targetPath = req.params[0];
-  console.log("▶️ Starte PUT /contents/* (Create/Update)");
-  console.log("📥 Zielpfad (PUT):", targetPath);
-  
-  try {
-    // 3. Entfernung der Pfad-Prüfung, um maximale Flexibilität zu gewährleisten
-    // const allowedWritePaths = ["rules_gpt/", "README.md", "src/", "docs/"];
-    // if (!allowedWritePaths.some(prefix => targetPath.startsWith(prefix))) {
-    //   console.error(`❌ Schreibzugriff verweigert für Pfad: ${targetPath}`);
-    //   return res.status(403).json({ error: `Write access denied for path: ${targetPath}` });
-    // }
-    // console.log("✅ Schreibzugriff für Pfad erlaubt (Pfad-Prüfung entfernt).");
-
-    const { message, content, branch, sha } = req.body || {};
-    if (!message || !content) {
-        console.error("❌ Fehlende body-Parameter: 'message' oder 'content'.");
-        return res.status(400).json({ error: "Missing required body parameters (message, content)" });
-    }
-    
-    const token = await getInstallationToken();
-    const ghUrl = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/contents/${encodeURIComponent(targetPath)}`;
-    const targetBranch = branch || BRANCH;
-
-    const gh = await fetch(ghUrl, {
+    const data = await ghFetch(`contents/${encodeURIComponent(path)}`, {
       method: "PUT",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: "application/vnd.github+json"
-      },
-      body: JSON.stringify({
-        message,
-        content,
-        branch: targetBranch,
-        ...(sha ? { sha } : {})
-      })
+      body: JSON.stringify(body)
     });
 
-    const { data, text } = await handleGitHubResponse(gh);
-
-    if (!gh.ok) {
-        console.error(`❌ GitHub PUT /contents/${targetPath} Fehler: ${gh.status} ${gh.statusText} :: ${text}`);
-    } else {
-        console.log(`✅ GitHub PUT /contents/${targetPath} erfolgreich: ${gh.status}. Commit-Branch: ${targetBranch}`);
-    }
-
-    res.status(gh.status).json(data);
+    console.log("✅ Datei geschrieben:", path);
+    res.status(200).json(data);
   } catch (e) {
-    console.error(`❌ PUT /contents/${targetPath} Fehler:`, e.message);
-    res.status(500).json({ error: String(e) });
+    console.error("❌ PUT fehlgeschlagen:", e.message);
+    res.status(500).json({ error: e.message });
   }
 });
-
-
-// DELETE mit verschachteltem Pfad
-app.delete("/contents/*", requireApiKey, async (req, res) => {
-  const targetPath = req.params[0];
-  console.log("▶️ Starte DELETE /contents/*");
-  console.log("🗑️ Löschen von:", targetPath);
-  try {
-    const { message, sha, branch } = req.body || {};
-    if (!message || !sha) {
-        console.error("❌ Fehlende body-Parameter: 'message' oder 'sha' (SHA der Datei ist zum Löschen erforderlich).");
-        return res.status(400).json({ error: "Missing required body parameters (message, sha)" });
-    }
-
-    const token = await getInstallationToken();
-    const ghUrl = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/contents/${encodeURIComponent(targetPath)}`;
-    const targetBranch = branch || BRANCH;
-
-    const gh = await fetch(ghUrl, {
-      method: "DELETE",
-      headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json" },
-      body: JSON.stringify({ message, sha, branch: targetBranch })
-    });
-
-    const { data, text } = await handleGitHubResponse(gh);
-    
-    if (!gh.ok) {
-        console.error(`❌ GitHub DELETE /contents/${targetPath} Fehler: ${gh.status} ${gh.statusText} :: ${text}`);
-    } else {
-        console.log(`✅ GitHub DELETE /contents/${targetPath} erfolgreich: ${gh.status}. Commit-Branch: ${targetBranch}`);
-    }
-    res.status(gh.status).json(data);
-  } catch (e) {
-    console.error(`❌ DELETE /contents/${targetPath} Fehler:`, e.message);
-    res.status(500).json({ error: String(e) });
-  }
-});
-
-// POST-Fallback zum Löschen
-// HINWEIS: Beibehalten für die Kompatibilität, aber DELETE ist präferiert
-app.post("/contents/*/delete", requireApiKey, async (req, res) => {
-  const targetPath = req.params[0];
-  console.log("▶️ Starte POST /contents/*/delete (DELETE Fallback)");
-  console.log("🗑️ Löschen von:", targetPath);
-  try {
-    const { message, sha, branch } = req.body || {};
-     if (!message || !sha) {
-        console.error("❌ Fehlende body-Parameter: 'message' oder 'sha'.");
-        return res.status(400).json({ error: "Missing required body parameters (message, sha)" });
-    }
-
-    const token = await getInstallationToken();
-    const ghUrl = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/contents/${encodeURIComponent(targetPath)}`;
-    const targetBranch = branch || BRANCH;
-
-    const gh = await fetch(ghUrl, {
-      method: "DELETE",
-      headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json" },
-      body: JSON.stringify({ message, sha, branch: targetBranch })
-    });
-    
-    const { data, text } = await handleGitHubResponse(gh);
-    
-    if (!gh.ok) {
-        console.error(`❌ GitHub DELETE (Fallback) /contents/${targetPath} Fehler: ${gh.status} ${gh.statusText} :: ${text}`);
-    } else {
-        console.log(`✅ GitHub DELETE (Fallback) /contents/${targetPath} erfolgreich: ${gh.status}. Commit-Branch: ${targetBranch}`);
-    }
-    res.status(gh.status).json(data);
-  } catch (e) {
-    console.error(`❌ POST /contents/*/delete Fehler:`, e.message);
-    res.status(500).json({ error: String(e) });
-  }
-});
-
 
 // ==========================================================
-// 4. /api/applyRules ENDPUNKT ENTFERNT/INTEGRIERT
-// Dessen Funktionalität (RAW-Content-Abruf) wurde in 
-// app.get("/contents/*") über den Query-Parameter ?raw=true integriert.
+// ❌ DELETE /contents/:path(*) – Datei löschen
 // ==========================================================
+app.delete("/contents/:path(*)", requireApiKey, async (req, res) => {
+  const path = req.params.path;
+  const { message, sha, branch } = req.body;
+  console.log("🗑️ DELETE Request:", path);
 
-const PORT = process.env.PORT || 10000;
+  if (!sha) return res.status(400).json({ error: "sha erforderlich" });
+
+  try {
+    const body = { message: message || `Delete ${path}`, sha, branch: branch || BRANCH };
+    const data = await ghFetch(`contents/${encodeURIComponent(path)}`, {
+      method: "DELETE",
+      body: JSON.stringify(body)
+    });
+    console.log("✅ Datei gelöscht:", path);
+    res.status(200).json(data);
+  } catch (e) {
+    console.error("❌ DELETE fehlgeschlagen:", e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ==========================================================
+// 🧨 POST /contents/:path(*)/delete – Alternative Löschmethode
+// ==========================================================
+app.post("/contents/:path(*)/delete", requireApiKey, async (req, res) => {
+  const path = req.params.path;
+  const { message, sha, branch } = req.body;
+  console.log("🧨 POST Delete Request:", path);
+
+  if (!sha) return res.status(400).json({ error: "sha erforderlich" });
+
+  try {
+    const body = { message: message || `Delete ${path}`, sha, branch: branch || BRANCH };
+    const data = await ghFetch(`contents/${encodeURIComponent(path)}`, {
+      method: "DELETE",
+      body: JSON.stringify(body)
+    });
+    console.log("✅ Datei via POST gelöscht:", path);
+    res.status(200).json(data);
+  } catch (e) {
+    console.error("❌ POST Delete fehlgeschlagen:", e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ==========================================================
+// 🚀 Serverstart
+// ==========================================================
+const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
-  console.log(`🚀 pixelbeav-proxy listening on :${PORT}`);
-  console.log("✅ Server gestartet.");
+  console.log(`🚀 PixelBeav Proxy läuft auf Port ${PORT}`);
 });
