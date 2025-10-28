@@ -1,7 +1,7 @@
 /**
  * ==========================================================
  * 🌐 PixelBeav Proxy Server – server.cjs (ENDGÜLTIG)
- * Version: 1.8.9.S (Fix: Stabile Hash-Speicherung & Finaler Header)
+ * Version: 1.8.9.S (Fix: Stabile Hash-Speicherung & Base64-Autodetect-Logik)
  * ==========================================================
  * Enthält folgende Routen/Funktionen:
  * * 🛠️ CORE ROUTEN
@@ -10,7 +10,7 @@
  * * 📂 GITHUB CRUD-ROUTEN (Mit API-Key Schutz)
  * ✔ /contents/                    – Root-Listing (GET)
  * ✔ /contents/:path(*)            – Datei/Ordner abrufen (GET)
- * ✔ /contents/:path(*) (PUT)      – Datei erstellen/aktualisieren (SHA optional)
+ * ✔ /contents/:path(*) (PUT)      – Datei erstellen/aktualisieren (SHA optional, **Base64-Handling**)
  * ✔ /contents/:path(*) (DELETE)   – Datei löschen (Benötigt SHA)
  * ✔ /contents/:path(*)/delete     – Alternative Löschroute (POST, findet SHA)
  * * 🔒 SICHERHEIT & ABSICHERUNG
@@ -168,11 +168,24 @@ app.get("/contents/:path(*)", requireApiKey, async (req, res) => {
 
 app.put("/contents/:path(*)", requireApiKey, async (req, res) => {
   const { path: filePath } = req.params;
-  const { message, content, branch, sha } = req.body;
+  // NEU: is_base64_encoded Flag hinzugefügt, um die Quelle zu kennzeichnen
+  const { message, content, branch, sha, is_base64_encoded } = req.body; 
   if (!message || !content) return res.status(400).json({ error: "message and content required" });
 
   try {
-    const contentEncoded = Buffer.from(content, 'utf8').toString('base64');
+    let contentEncoded;
+
+    // PRÜFUNG: Wenn is_base64_encoded = true, wird der Inhalt direkt verwendet.
+    if (is_base64_encoded === true) {
+        console.log("ℹ️ Content ist bereits Base64, wird direkt verwendet.");
+        contentEncoded = content;
+    } else {
+        // Andernfalls (Standardfall: Rohdaten), wird er neu in Base64 encodiert.
+        console.log("ℹ️ Content ist Rohdaten, wird in Base64 encodiert.");
+        // Wir encodieren immer von UTF-8 zu Base64
+        contentEncoded = Buffer.from(content, 'utf8').toString('base64');
+    }
+    
     const body = { message, content: contentEncoded, branch: branch || BRANCH };
     if (sha) body.sha = sha;
     
@@ -244,14 +257,17 @@ async function getBackupInstallationToken() {
 }
 
 /**
- * **KORRIGIERTE Logik:** Ruft den Hash-Wert ab. Bei 404 (Datei nicht vorhanden) wird null/null zurückgegeben.
+ * Ruft den aktuellen Hash-Wert und den SHA (für Updates) der Hash-Datei ab.
+ * Wenn die Datei nicht existiert (404), wird hash:null und sha:null zurückgegeben.
+ * @param {string} token - Der Installations-Token für das Proxy-Repo.
+ * @returns {{hash: string|null, sha: string|null}}
  */
 async function getLatestRemoteHash(token) {
     const hashPath = 'backups/current_server_cjs_hash.txt';
     const url = `https://api.github.com/repos/${PROXY_REPO_OWNER}/${PROXY_REPO_NAME}/contents/${hashPath}`;
 
     try {
-        // 1. Abrufen der Metadaten (SHA) für die spätere Aktualisierung
+        // 1. Abrufen der Metadaten (SHA)
         const metaRes = await fetch(url, {
              headers: { Authorization: `token ${token}`, Accept: "application/vnd.github+json" }
         });
@@ -358,8 +374,7 @@ async function getLatestRemoteHash(token) {
         branch: PROXY_BRANCH || "main",
     };
     
-    // **FIX:** Der SHA wird NUR hinzugefügt, wenn wir ihn von GitHub beim Abruf erhalten haben. 
-    // Wenn er NULL ist (404-Fall), wird er weggelassen, wodurch der PUT-Call die Datei erstellt (Status 201).
+    // FIX für 404: Der SHA wird NUR hinzugefügt, wenn wir ihn von GitHub beim Abruf erhalten haben.
     if (remoteHashSha) {
         hashUpdateObject.sha = remoteHashSha;
     }
@@ -375,8 +390,6 @@ async function getLatestRemoteHash(token) {
     if (!hashUpdateRes.ok) {
         const errorData = await hashUpdateRes.json();
         console.error("⚠️ [Proxy-Backup] Hash-Update fehlgeschlagen:", errorData);
-        // ACHTUNG: Der 404-Fehler wird hier als fatal protokolliert, aber die Haupt-App läuft weiter.
-        // Der nächste Lauf wird versuchen, das Hash-File erneut zu erstellen.
         throw new Error(`Hash Update Error: ${hashUpdateRes.status} ${JSON.stringify(errorData)}`); 
     }
     console.log("✅ [Proxy-Backup] Hash-Datei erfolgreich aktualisiert. Nächster Lauf wird übersprungen, falls keine Änderung.");
