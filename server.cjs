@@ -45,6 +45,40 @@ if (!APP_ID || !INSTALLATION_ID || !REPO_OWNER || !REPO_NAME || !GH_APP_PRIVATE_
   process.exit(1);
 }
 
+let cachedToken = { token: null, expiresAt: 0 };
+
+function makeJwt() {
+  const now = Math.floor(Date.now() / 1000);
+  const payload = { iat: now - 60, exp: now + 9 * 60, iss: APP_ID };
+  const token = jwt.sign(payload, GH_APP_PRIVATE_KEY, { algorithm: "RS256" });
+  return token;
+}
+
+async function getInstallationToken() {
+  const now = Math.floor(Date.now() / 1000);
+  if (cachedToken.token && cachedToken.expiresAt > now + 60) {
+    return cachedToken.token;
+  }
+  console.log("🔄 Requesting new GitHub Installation Token...");
+  const res = await fetch(`https://api.github.com/app/installations/${INSTALLATION_ID}/access_tokens`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${makeJwt()}`,
+      Accept: "application/vnd.github+json"
+    }
+  });
+
+  const data = await res.json();
+  if (!res.ok) throw new Error(`Token Error: ${res.status} ${JSON.stringify(data)}`);
+
+  cachedToken = {
+    token: data.token,
+    expiresAt: Math.floor(new Date(data.expires_at).getTime() / 1000)
+  };
+  console.log("✅ Installation Token erfolgreich abgerufen.");
+  return data.token;
+}
+
 // ===============================================================
 // 🔸 AUTO-BACKUP-SYSTEM MIT GITHUB-UPLOAD (v1.9.4 – angepasst an PixelBeav Proxy)
 // ===============================================================
@@ -113,42 +147,6 @@ async function createRemoteBackup() {
 
 // 🔹 Beim Start automatisch ausführen
 createRemoteBackup();
-
-
-
-let cachedToken = { token: null, expiresAt: 0 };
-
-function makeJwt() {
-  const now = Math.floor(Date.now() / 1000);
-  const payload = { iat: now - 60, exp: now + 9 * 60, iss: APP_ID };
-  const token = jwt.sign(payload, GH_APP_PRIVATE_KEY, { algorithm: "RS256" });
-  return token;
-}
-
-async function getInstallationToken() {
-  const now = Math.floor(Date.now() / 1000);
-  if (cachedToken.token && cachedToken.expiresAt > now + 60) {
-    return cachedToken.token;
-  }
-  console.log("🔄 Requesting new GitHub Installation Token...");
-  const res = await fetch(`https://api.github.com/app/installations/${INSTALLATION_ID}/access_tokens`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${makeJwt()}`,
-      Accept: "application/vnd.github+json"
-    }
-  });
-
-  const data = await res.json();
-  if (!res.ok) throw new Error(`Token Error: ${res.status} ${JSON.stringify(data)}`);
-
-  cachedToken = {
-    token: data.token,
-    expiresAt: Math.floor(new Date(data.expires_at).getTime() / 1000)
-  };
-  console.log("✅ Installation Token erfolgreich abgerufen.");
-  return data.token;
-}
 
 const app = express();
 app.use(express.json({ limit: "5mb" }));
