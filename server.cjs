@@ -46,35 +46,26 @@ if (!APP_ID || !INSTALLATION_ID || !REPO_OWNER || !REPO_NAME || !GH_APP_PRIVATE_
 }
 
 // ===============================================================
-// 🔸 AUTO-BACKUP-SYSTEM MIT GITHUB-UPLOAD (v1.9.1)
+// 🔸 AUTO-BACKUP-SYSTEM MIT GITHUB-UPLOAD (v1.9.3 angepasst auf Proxy-Kontext)
 // ===============================================================
-//  Erstellt bei jedem neuen Deploy eine Kopie von server.cjs im
-//  GitHub-Repository unter /backups/.
-//  Erkennt identische Versionen per SHA1-Hash und legt nur ein
-//  Backup pro Änderung an.
+//  Verwendung:
+//    - Nutzt die bereits global deklarierten Konstanten und Authentifizierungsobjekte
+//      aus der bestehenden server.cjs (APP_ID, INSTALLATION_ID, PRIVATE_KEY, token).
+//    - Erzeugt pro Codeänderung eine Kopie der server.cjs im GitHub-Repository
+//      unter /backups/.
+//    - Erkennt identische Versionen über SHA1 und überspringt doppelte Backups.
 // ===============================================================
 
 const fs = require("fs");
 const crypto = require("crypto");
 
+// ⚙️ Diese Funktion setzt voraus, dass die folgenden Variablen im globalen Bereich existieren:
+//    const OWNER = process.env.REPO_OWNER || "RiseStudio-Backoffice";
+//    const REPO  = process.env.REPO_NAME  || "PixelBeav.App";
+//    const token = <aus globaler Authentifizierung erzeugt>;
+
 async function createRemoteBackup() {
   try {
-    const OWNER = "RiseStudio-Backoffice";
-    const REPO = "PixelBeav.App";
-
-    const { createAppAuth } = require("@octokit/auth-app");
-    const APP_ID = process.env.GH_APP_ID;
-    const INSTALLATION_ID = process.env.GH_INSTALL_ID;
-    const PRIVATE_KEY = process.env.GH_PRIVATE_KEY;
-
-    const auth = createAppAuth({
-      appId: APP_ID,
-      privateKey: PRIVATE_KEY,
-      installationId: INSTALLATION_ID,
-    });
-    const installationAuthentication = await auth({ type: "installation" });
-    const token = installationAuthentication.token;
-
     const currentFile = "./server.cjs";
     const current = fs.readFileSync(currentFile, "utf8");
     const currentSHA = crypto.createHash("sha1").update(current).digest("hex");
@@ -122,7 +113,9 @@ async function createRemoteBackup() {
   }
 }
 
+// 🔹 Beim Start einmal ausführen:
 createRemoteBackup();
+
 
 
 let cachedToken = { token: null, expiresAt: 0 };
