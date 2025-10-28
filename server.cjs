@@ -1,15 +1,14 @@
 /**
  * ==========================================================
  * 🌐 PixelBeav Proxy Server – server.cjs (ENDGÜLTIG)
- * Version: 1.8.9.S (Fix: Stabile Hash-Speicherung & Base64-Autodetect-Logik)
+ * Version: 1.9.0.C (Feature: Automatische Backup-Bereinigung)
  * ==========================================================
  * Enthält folgende Routen/Funktionen:
  * * 🛠️ CORE ROUTEN
  * ✔ /health                       – Systemstatus
  * ✔ /debug/head-test              – Header & Token-Test
  * * 📂 GITHUB CRUD-ROUTEN (Mit API-Key Schutz)
- * ✔ /contents/             
- * – Root-Listing (GET)
+ * ✔ /contents/                    – Root-Listing (GET)
  * ✔ /contents/:path(*)            – Datei/Ordner abrufen (GET)
  * ✔ /contents/:path(*) (PUT)      – Datei erstellen/aktualisieren (SHA optional, **Base64-Handling**)
  * ✔ /contents/:path(*) (DELETE)   – Datei löschen (Benötigt SHA)
@@ -18,6 +17,7 @@
  * ✔ Aggressive Key-Normalisierung gegen Leerzeichen & Doppel-Header
  * ✔ Bedingtes Auto-Backup (nur bei Dateiänderung, mit Hash-Prüfung)
  * ✔ Korrekter CET/CEST-Zeitstempel für Backups
+ * ✔ NEU: Automatische Bereinigung alter Backups (max. 3 behalten)
  * ==========================================================
  */
 
@@ -166,24 +166,24 @@ app.put("/contents/:path(*)", requireApiKey, async (req, res) => {
   if (!message || !content) return res.status(400).json({ error: "message and content required" });
 
   try {
-    let currentSha = sha; // 
+    let currentSha = sha;
     
     // NEUE LOGIK: SHA automatisch abrufen, wenn er für ein Update fehlt.
-    if (!currentSha) { // 
+    if (!currentSha) {
       console.log(`ℹ️ SHA fehlt für ${filePath}. Versuche, Metadaten abzurufen...`);
-      try { // 
-        const meta = await ghFetch(`contents/${encodeURIComponent(filePath)}`); // 
+      try {
+        const meta = await ghFetch(`contents/${encodeURIComponent(filePath)}`);
         // Prüfen, ob die Datei existiert und einen SHA hat
-        if (meta && meta.sha) { // 
-            currentSha = meta.sha; // 
-            console.log("✅ SHA für Update automatisch gefunden."); // 
+        if (meta && meta.sha) {
+            currentSha = meta.sha;
+            console.log("✅ SHA für Update automatisch gefunden.");
         }
-      } catch (metaError) { // 
+      } catch (metaError) {
         // Ignoriere 404-Fehler, da dies bedeutet, dass die Datei neu erstellt wird (kein SHA nötig)
-        if (metaError.message && !metaError.message.includes("GitHubError 404")) { // 
+        if (metaError.message && !metaError.message.includes("GitHubError 404")) {
            throw metaError; // Andere Fehler weitergeben
         }
-        console.log("ℹ️ Datei nicht gefunden (404), wird neu erstellt."); // 
+        console.log("ℹ️ Datei nicht gefunden (404), wird neu erstellt.");
       }
     }
     
@@ -203,7 +203,7 @@ app.put("/contents/:path(*)", requireApiKey, async (req, res) => {
     
     const body = { message, content: contentEncoded, branch: branch ||
 BRANCH };
-    if (currentSha) body.sha = currentSha; // Nutze den gefundenen SHA
+    if (currentSha) body.sha = currentSha;
     
     const data = await ghFetch(`contents/${encodeURIComponent(filePath)}`, {
       method: "PUT", body: JSON.stringify(body)
@@ -304,6 +304,69 @@ return { hash: null, sha: null };
     }
 }
 
+/**
+ * Löscht automatisch die ältesten Backups, sodass nur die MAX_BACKUPS neuesten erhalten bleiben.
+ * @param {string} token - Der Installations-Token für das Proxy-Repo.
+ * @param {number} maxBackups - Die maximale Anzahl an Backups, die behalten werden soll.
+ */
+async function cleanupOldBackups(token, maxBackups) {
+    const backupRepoUrl = `https://api.github.com/repos/${PROXY_REPO_OWNER}/${PROXY_REPO_NAME}/contents/backups`;
+    const deleteBranch = PROXY_BRANCH || "main";
+
+    try {
+        // 1. Liste der Dateien abrufen
+        const listRes = await fetch(backupRepoUrl, {
+            headers: { Authorization: `token ${token}`, Accept: "application/vnd.github+json" }
+        });
+        if (!listRes.ok) {
+            if (listRes.status === 404) return console.log("ℹ️ [Proxy-Backup] 'backups/' Ordner existiert nicht, keine Bereinigung nötig.");
+            throw new Error(`Cleanup List Error: ${listRes.status}`);
+        }
+        const files = await listRes.json();
+
+        // 2. Filtern und Sortieren der Backup-Dateien
+        const backupFiles = files
+            // Nur Dateien, die dem Backup-Muster entsprechen
+            .filter(f => f.type === 'file' && f.name.startsWith('server_backup_') && f.name.endsWith('.cjs'))
+            // Sortieren nach Name (Älteste zuerst, da der Zeitstempel im Namen enthalten ist)
+            .sort((a, b) => a.name.localeCompare(b.name));
+
+        if (backupFiles.length <= maxBackups) {
+            return console.log(`✅ [Proxy-Backup] Nur ${backupFiles.length} Backups vorhanden (max. ${maxBackups}). Keine Bereinigung nötig.`);
+        }
+
+        // Dateien zum Löschen: Die ältesten (vom Anfang des Arrays), bis nur noch maxBackups übrig sind.
+        const filesToDelete = backupFiles.slice(0, backupFiles.length - maxBackups);
+        console.log(`🗑️ [Proxy-Backup] Werde ${filesToDelete.length} älteste Backups löschen.`);
+
+        // 3. Löschen der ältesten Dateien
+        for (const file of filesToDelete) {
+            const deleteUrl = `${backupRepoUrl}/${file.name}`;
+            const deleteBody = JSON.stringify({
+                message: `🗑️ Auto-Cleanup: Delete oldest backup ${file.name}`,
+                sha: file.sha, // SHA ist für das Löschen zwingend erforderlich
+                branch: deleteBranch
+            });
+
+            const deleteRes = await fetch(deleteUrl, {
+                method: "DELETE",
+                headers: { Authorization: `token ${token}`, Accept: "application/vnd.github+json", "Content-Type": "application/json" },
+                body: deleteBody,
+            });
+
+            if (deleteRes.ok) {
+                console.log(`✅ [Proxy-Backup] Gelöscht: ${file.name}`);
+            } else {
+                const errorData = await deleteRes.json();
+                console.error(`❌ [Proxy-Backup] Löschfehler für ${file.name}: ${deleteRes.status} ${JSON.stringify(errorData)}`);
+            }
+        }
+    } catch (e) {
+        console.error("❌ [Proxy-Backup-Fehler] Fehler bei der Bereinigung alter Backups:", e.message);
+    }
+}
+
+
 ;(async () => {
   console.log("🧩 [Proxy-Backup] Initialisiere automatisches Backup-System ...");
 
@@ -318,8 +381,7 @@ return { hash: null, sha: null };
     const serverData = fs.readFileSync(currentFilePath, "utf-8");
     const currentFileHash = crypto.createHash('sha256').update(serverData, 'utf8').digest('hex');
 
-    // 2. Token abrufen und 
-Remote-Hash prüfen
+    // 2. Token abrufen und Remote-Hash prüfen
     const token = await getBackupInstallationToken(); 
     const { hash: remoteHash, sha: remoteHashSha } = await getLatestRemoteHash(token);
 
@@ -396,6 +458,10 @@ if (!hashUpdateRes.ok) {
 throw new Error(`Hash Update Error: ${hashUpdateRes.status} ${JSON.stringify(errorData)}`); 
     }
     console.log("✅ [Proxy-Backup] Hash-Datei erfolgreich aktualisiert. Nächster Lauf wird übersprungen, falls keine Änderung.");
+
+    // 7. NEUE LOGIK: Bereinigung alter Backups (Maximal 3 behalten)
+    await cleanupOldBackups(token, 3);
+
 } catch (error) {
     console.error("❌ [Proxy-Backup-Fehler]", error);
   }
