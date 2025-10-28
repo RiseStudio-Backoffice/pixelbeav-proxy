@@ -44,6 +44,67 @@ if (!APP_ID || !INSTALLATION_ID || !REPO_OWNER || !REPO_NAME || !GH_APP_PRIVATE_
   console.error("❌ Fehlende ENV-Variablen. Bitte prüfe APP_ID, INSTALLATION_ID, REPO_OWNER, REPO_NAME, GH_APP_PRIVATE_KEY, BRANCH.");
   process.exit(1);
 }
+// ===============================================================
+// 🟡 AUTO-BACKUP-SYSTEM MIT ZEITSTEMPEL + SHA-VERGLEICH (v1.8.0)
+// ===============================================================
+// Zweck:
+//  - Erstellt automatisch bei jeder neuen Serverversion ein Backup.
+//  - Speichert die Datei in /backups/server_backup_YYYY-MM-DD_HH-MM-SS.cjs.
+//  - Prüft den SHA1-Hash der aktuellen server.cjs, um identische Versionen
+//    zu erkennen und unnötige Backups zu vermeiden.
+//  - Voll kompatibel mit Render, benötigt keine Zusatzpakete.
+//
+// Einfügepunkt: direkt nach den require()-Zeilen (oberhalb deiner Express-Init).
+// ===============================================================
+
+const fs = require("fs");
+const crypto = require("crypto");
+
+try {
+  const backupDir = "./backups";
+
+  // Ordner anlegen, falls nicht vorhanden
+  if (!fs.existsSync(backupDir)) {
+    fs.mkdirSync(backupDir);
+    console.log("\x1b[33m[Proxy-Init] 🗂️ Backup-Ordner erstellt:\x1b[0m", backupDir);
+  }
+
+  // Inhalt der aktuellen server.cjs lesen
+  const currentFile = "./server.cjs";
+  const current = fs.readFileSync(currentFile, "utf8");
+
+  // Hash (SHA1) der Datei berechnen
+  const currentSHA = crypto.createHash("sha1").update(current).digest("hex");
+
+  // Datei mit dem letzten gespeicherten SHA lesen, falls vorhanden
+  const shaFile = `${backupDir}/last_sha.txt`;
+  const lastSHA = fs.existsSync(shaFile)
+    ? fs.readFileSync(shaFile, "utf8").trim()
+    : null;
+
+  // Prüfen, ob sich der Inhalt geändert hat
+  if (currentSHA !== lastSHA) {
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+    const backupPath = `${backupDir}/server_backup_${timestamp}.cjs`;
+
+    // Backup-Datei erstellen
+    fs.copyFileSync(currentFile, backupPath);
+
+    // Neuen Hash speichern
+    fs.writeFileSync(shaFile, currentSHA);
+
+    console.log(
+      "\x1b[33m[Proxy-Init] 🟡 Neues Backup erstellt:\x1b[0m",
+      backupPath
+    );
+  } else {
+    console.log(
+      "\x1b[32m[Proxy-Init] 🟢 Kein Backup nötig (identische Version erkannt)\x1b[0m"
+    );
+  }
+} catch (err) {
+  console.error("\x1b[31m[Proxy-Init-Fehler]\x1b[0m", err);
+}
 
 let cachedToken = { token: null, expiresAt: 0 };
 
