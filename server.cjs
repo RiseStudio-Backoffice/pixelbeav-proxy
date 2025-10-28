@@ -1,7 +1,7 @@
 /**
  * ==========================================================
  * 🌐 PixelBeav Proxy Server – server.cjs (ENDGÜLTIG)
- * Version: 1.8.8.S (Finaler Fix: CET-Zeitstempel & Bedingtes Backup)
+ * Version: 1.8.9.S (Fix: Stabile Hash-Speicherung & Finaler Header)
  * ==========================================================
  * Enthält folgende Routen/Funktionen:
  * * 🛠️ CORE ROUTEN
@@ -28,11 +28,9 @@ const crypto = require("crypto");
 const fetch = (...a) => import("node-fetch").then(({ default: f }) => f(...a));
 
 try {
-  // Versucht, Umgebungsvariablen aus einer lokalen .env Datei zu laden (lokale Entwicklung)
   require("dotenv").config(); 
   console.log("✅ Dotenv geladen.");
 } catch (e) {
-  // Wenn in der Produktionsumgebung (Render) geladen, wird dieser Fehler erwartet
   console.warn("⚠️ Dotenv konnte nicht geladen werden:", e.message);
 }
 
@@ -46,35 +44,19 @@ const {
 // ==========================================================
 // 🔑 ULTIMATIVE PRIVATE KEY VERARBEITUNG
 // ==========================================================
-
-/**
- * Verarbeitet den Private Key: Entfernt alle Header/Footer, trimmt und 
- * baut den Key im strikten PEM-Format neu auf, um alle Umgebungsvariablen-Fehler zu umgehen.
- */
 const processKey = (key) => {
     if (!key) return null;
-
     let processedKey = key.trim();
-
-    // 1. Normalisierung der Zeilenenden (CRLF -> LF)
     processedKey = processedKey.replace(/\r\n/g, '\n');
-    
-    // 2. Escaping Normalization (für Single-Line-Secrets)
     if (!processedKey.includes('\n') && processedKey.includes('\\n')) {
         processedKey = processedKey.replace(/\\n/g, '\n');
     }
-    
-    // 3. AGGRESSIVE HEADER REKONSTRUKTION
     const START_TAG = '-----BEGIN RSA PRIVATE KEY-----';
     const END_TAG = '-----END RSA PRIVATE KEY-----';
-    
-    // Entferne JEDEN PEM-Header und Footer, der existieren könnte (behebt Doppel-Header)
     const content = processedKey
         .replace(/-----BEGIN ([A-Z0-9]+ )?PRIVATE KEY-----/g, '')
         .replace(/-----END ([A-Z0-9]+ )?PRIVATE KEY-----/g, '')
-        .trim(); // Erneutes Trimmen nur der Content-Payload
-
-    // Baue den Key im strikten RSA PRIVATE KEY Format neu auf (gewünschtes Format)
+        .trim();
     return `${START_TAG}\n${content}\n${END_TAG}`;
 };
 
@@ -91,18 +73,15 @@ if (!APP_ID || !INSTALLATION_ID || !REPO_OWNER || !REPO_NAME || !APP_KEY || !BRA
   process.exit(1);
 }
 
-// Globaler Cache für Haupt- und Backup-Tokens
 let cachedToken = { token: null, expiresAt: 0 };
 let cachedBackupToken = { token: null, expiresAt: 0 };
 
-/** Erstellt einen JWT für eine gegebene App ID und Private Key. */
 function makeJwt(privateKey, appId) {
   const now = Math.floor(Date.now() / 1000);
   const payload = { iat: now - 60, exp: now + 9 * 60, iss: appId };
   return jwt.sign(payload, privateKey, { algorithm: "RS256" });
 }
 
-/** Holt und cached den Installation Token für die Haupt-App. */
 async function getInstallationToken() {
   const { token, expiresAt } = cachedToken;
   const now = Math.floor(Date.now() / 1000);
@@ -121,9 +100,6 @@ async function getInstallationToken() {
   return data.token;
 }
 
-/**
- * 🌐 Zentralisierte GitHub API Fetch-Funktion
- */
 async function ghFetch(path, options = {}) {
   const token = await getInstallationToken();
   const url = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/${path}`;
@@ -156,7 +132,6 @@ app.use((req, _res, next) => {
   next();
 });
 
-// Middleware zur API Key-Prüfung
 function requireApiKey(req, res, next) {
   const key = req.headers["x-api-key"] || req.query.apiKey;
   if (!API_KEY || key !== API_KEY) {
@@ -268,7 +243,6 @@ async function getBackupInstallationToken() {
   return data.token;
 }
 
-// Hilfsfunktion zum Abrufen des letzten gespeicherten Hash aus GitHub
 async function getLatestRemoteHash(token) {
     const hashPath = 'backups/current_server_cjs_hash.txt';
     const url = `https://api.github.com/repos/${PROXY_REPO_OWNER}/${PROXY_REPO_NAME}/contents/${hashPath}`;
@@ -294,6 +268,7 @@ async function getLatestRemoteHash(token) {
         return { hash: remoteHash.trim(), sha: metaData.sha };
         
     } catch (error) {
+        // Bei Fehler im Hash-Prozess (z.B. falsche Kodierung oder Timeouts) versuchen wir es beim nächsten Mal erneut.
         console.warn("⚠️ [Proxy-Backup] Fehler beim Abrufen/Verarbeiten des Remote-Hash:", error.message);
         return { hash: null, sha: null }; 
     }
@@ -330,13 +305,12 @@ async function getLatestRemoteHash(token) {
         year: 'numeric', month: '2-digit', day: '2-digit',
         hour: '2-digit', minute: '2-digit', second: '2-digit',
         hourCycle: 'h23', 
-        timeZone: 'Europe/Berlin' // Festlegung der Mitteleuropäischen Zeit
+        timeZone: 'Europe/Berlin'
     });
-    // Konvertiert z.B. "2025-10-28 17:07:00" zu "2025-10-28_17-07-00"
     const timestamp = cetDate.replace(' ', '_').replace(/:/g, '-').replace(',', '');
 
 
-    // 4. Lokales Backup (wie gehabt, für maximale Sicherheit)
+    // 4. Lokales Backup
     const backupDir = path.join(process.cwd(), "backups");
     if (!fs.existsSync(backupDir)) { fs.mkdirSync(backupDir); }
     fs.writeFileSync(path.join(backupDir, `server_backup_${timestamp}.cjs`), serverData);
@@ -354,7 +328,7 @@ async function getLatestRemoteHash(token) {
     });
 
     const uploadRes = await fetch(backupUrl, {
-      method: "PUT", // PUT erstellt die Datei, wenn sie nicht existiert
+      method: "PUT",
       headers: { Authorization: `token ${token}`, Accept: "application/vnd.github+json", "Content-Type": "application/json" },
       body: backupBody,
     });
@@ -369,21 +343,28 @@ async function getLatestRemoteHash(token) {
     // 6. Hash-Datei aktualisieren (WICHTIG für den nächsten Lauf)
     const hashPath = 'backups/current_server_cjs_hash.txt';
     const hashUpdateUrl = `https://api.github.com/repos/${PROXY_REPO_OWNER}/${PROXY_REPO_NAME}/contents/${hashPath}`;
-    const hashUpdateBody = JSON.stringify({
+    
+    // Body-Objekt erstellen und SHA nur bei Update hinzufügen
+    const hashUpdateObject = {
         message: `🤖 Update server.cjs hash to ${currentFileHash.substring(0, 10)}`,
         content: Buffer.from(currentFileHash, "utf-8").toString("base64"),
         branch: PROXY_BRANCH || "main",
-        sha: remoteHashSha, // Für die Aktualisierung des bestehenden Hash-Files
-    });
+    };
+    if (remoteHashSha) {
+        hashUpdateObject.sha = remoteHashSha;
+    }
+    const hashUpdateBody = JSON.stringify(hashUpdateObject);
+
 
     const hashUpdateRes = await fetch(hashUpdateUrl, {
-        method: remoteHashSha ? "PUT" : "POST", // PUT/POST basierend darauf, ob die Hash-Datei existiert
+        method: "PUT", // Muss PUT sein für create/update file contents API
         headers: { Authorization: `token ${token}`, Accept: "application/vnd.github+json", "Content-Type": "application/json" },
         body: hashUpdateBody,
     });
 
     if (!hashUpdateRes.ok) {
         const errorData = await hashUpdateRes.json();
+        console.error("⚠️ [Proxy-Backup] Hash-Update fehlgeschlagen:", errorData);
         throw new Error(`Hash Update Error: ${hashUpdateRes.status} ${JSON.stringify(errorData)}`); 
     }
     console.log("✅ [Proxy-Backup] Hash-Datei erfolgreich aktualisiert. Nächster Lauf wird übersprungen, falls keine Änderung.");
