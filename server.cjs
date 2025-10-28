@@ -46,23 +46,16 @@ if (!APP_ID || !INSTALLATION_ID || !REPO_OWNER || !REPO_NAME || !GH_APP_PRIVATE_
 }
 
 // ===============================================================
-// 🔸 AUTO-BACKUP-SYSTEM MIT GITHUB-UPLOAD (v1.9.3 angepasst auf Proxy-Kontext)
+// 🔸 AUTO-BACKUP-SYSTEM MIT GITHUB-UPLOAD (v1.9.4 – angepasst an PixelBeav Proxy)
 // ===============================================================
-//  Verwendung:
-//    - Nutzt die bereits global deklarierten Konstanten und Authentifizierungsobjekte
-//      aus der bestehenden server.cjs (APP_ID, INSTALLATION_ID, PRIVATE_KEY, token).
-//    - Erzeugt pro Codeänderung eine Kopie der server.cjs im GitHub-Repository
-//      unter /backups/.
-//    - Erkennt identische Versionen über SHA1 und überspringt doppelte Backups.
+//  Verwendet die bestehenden ENV-Konstanten aus dem oberen Block:
+//  APP_ID, INSTALLATION_ID, REPO_OWNER, REPO_NAME, GH_APP_PRIVATE_KEY, API_KEY.
+//  Erstellt pro Codeänderung eine Kopie der server.cjs im GitHub-Repository
+//  unter /backups/ und überspringt identische Versionen.
 // ===============================================================
 
 const fs = require("fs");
 const crypto = require("crypto");
-
-// ⚙️ Diese Funktion setzt voraus, dass die folgenden Variablen im globalen Bereich existieren:
-//    const OWNER = process.env.REPO_OWNER || "RiseStudio-Backoffice";
-//    const REPO  = process.env.REPO_NAME  || "PixelBeav.App";
-//    const token = <aus globaler Authentifizierung erzeugt>;
 
 async function createRemoteBackup() {
   try {
@@ -80,20 +73,25 @@ async function createRemoteBackup() {
       return;
     }
 
+    // 🔹 Backup-Dateiname mit Zeitstempel
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
     const backupPath = `backups/server_backup_${timestamp}.cjs`;
+
+    // 🔹 Dateiinhalt Base64-kodieren
     const encoded = Buffer.from(current, "utf8").toString("base64");
 
-    const url = `https://api.github.com/repos/${OWNER}/${REPO}/contents/${backupPath}`;
+    // 🔹 GitHub-API-Aufruf vorbereiten
+    const url = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/contents/${backupPath}`;
     const body = JSON.stringify({
       message: `Automatisches Backup von server.cjs (${timestamp})`,
       content: encoded,
     });
 
+    // 🔹 Fetch-Aufruf mit dem bereits global verfügbaren Token
     const response = await fetch(url, {
       method: "PUT",
       headers: {
-        Authorization: `token ${token}`,
+        Authorization: `token ${API_KEY}`,
         "Content-Type": "application/json",
       },
       body,
@@ -113,7 +111,7 @@ async function createRemoteBackup() {
   }
 }
 
-// 🔹 Beim Start einmal ausführen:
+// 🔹 Beim Start automatisch ausführen
 createRemoteBackup();
 
 
