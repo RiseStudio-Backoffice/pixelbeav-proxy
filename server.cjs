@@ -1,17 +1,14 @@
 /**
  * ==========================================================
  * 🌐 PixelBeav Proxy Server – server.cjs (FINAL SLIM & ROBUST)
- * Version: 1.8.4.S (Endgültiger Fix für Key-Escapierung)
- * ==========================================================
- * Behebt den hartnäckigen "secretOrPrivateKey" Fehler,
- * indem die Key-Korrektur flexibler gestaltet wird.
+ * Version: 1.8.4.S (Behebt Tippfehler und Key-Formatfehler für beide Keys)
  * ==========================================================
  */
 
 const express = require("express");
 const jwt = require("jsonwebtoken");
 const path = require("path");
-const fs = require("fs"); 
+const fs = require("fs"); // Notwendig für lokales Backup
 const fetch = (...a) => import("node-fetch").then(({ default: f }) => f(...a));
 
 try {
@@ -21,15 +18,14 @@ try {
   console.warn("⚠️ Dotenv konnte nicht geladen werden:", e.message);
 }
 
-// ⚙️ Environment Variablen & Private Key Fix
+// ⚙️ Environment Variablen
 const {
   APP_ID, INSTALLATION_ID, REPO_OWNER, REPO_NAME, BRANCH, APP_PRIVATE_KEY, API_KEY,
   PROXY_APP_ID, PROXY_INSTALLATION_ID, PROXY_PRIVATE_KEY, PROXY_REPO_OWNER, PROXY_REPO_NAME, PROXY_BRANCH,
 } = process.env;
 
-// DIESE ZWEI ZEILEN SIND DIE ENTSCHEIDENDEN FIXES
-// Führt die Ersetzung durch, wenn der Key keinen echten Zeilenumbruch enthält,
-// um die "secretOrPrivateKey" Fehlermeldung zu beheben.
+// DIESER CODE ERSETZT DIE ESCAPIERTEN ZEILENUMBRÜCHE FÜR BEIDE KEYS ROBUST
+// Dadurch wird der "secretOrPrivateKey" Fehler behoben.
 const APP_KEY = APP_PRIVATE_KEY && !APP_PRIVATE_KEY.includes('\n') 
     ? APP_PRIVATE_KEY.replace(/\\n/g, '\n') 
     : APP_PRIVATE_KEY;
@@ -37,9 +33,9 @@ const APP_KEY = APP_PRIVATE_KEY && !APP_PRIVATE_KEY.includes('\n')
 const PROXY_KEY = PROXY_PRIVATE_KEY && !PROXY_PRIVATE_KEY.includes('\n') 
     ? PROXY_PRIVATE_KEY.replace(/\\n/g, '\n') 
     : PROXY_PRIVATE_KEY;
-// Ende der kritischen Fixes
 
 console.log("🔐 Starting PixelBeav Proxy...");
+// Prüfe auf APP_KEY (der korrigierte Primary Key)
 if (!APP_ID || !INSTALLATION_ID || !REPO_OWNER || !REPO_NAME || !APP_KEY || !BRANCH) {
   console.error("❌ Fehlende ENV-Variablen. Bitte prüfen Sie die notwendigen Keys.");
   process.exit(1);
@@ -66,11 +62,11 @@ async function getInstallationToken() {
   const now = Math.floor(Date.now() / 1000);
   if (token && expiresAt > now + 60) return token;
 
-  console.log("🔄 Requesting new GitHub Installation Token...");
+  console.log("🔄 Requesting new GitHub Installation Token (Haupt-App)...");
   const res = await fetch(`https://api.github.com/app/installations/${INSTALLATION_ID}/access_tokens`, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${makeJwt(APP_KEY, APP_ID)}`, // Nutzt den robusten Key
+      Authorization: `Bearer ${makeJwt(APP_KEY, APP_ID)}`, // Nutzt APP_KEY
       Accept: "application/vnd.github+json"
     }
   });
@@ -247,7 +243,7 @@ async function getBackupInstallationToken() {
   const res = await fetch(`https://api.github.com/app/installations/${PROXY_INSTALLATION_ID}/access_tokens`, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${makeJwt(PROXY_KEY, PROXY_APP_ID)}`, // Nutzt den robusten Key
+      Authorization: `Bearer ${makeJwt(PROXY_KEY, PROXY_APP_ID)}`, // Nutzt PROXY_KEY
       Accept: "application/vnd.github+json"
     }
   });
@@ -266,6 +262,7 @@ async function getBackupInstallationToken() {
   console.log("🧩 [Proxy-Backup] Initialisiere automatisches Backup-System ...");
 
   try {
+    // Verwendung von PROXY_KEY in der Variablenprüfung
     if (!PROXY_APP_ID || !PROXY_INSTALLATION_ID || !PROXY_KEY || !PROXY_REPO_OWNER || !PROXY_REPO_NAME) {
       console.error("❌ [Proxy-Backup] Fehlende Proxy-Variablen. Backup abgebrochen.");
       return;
@@ -273,7 +270,10 @@ async function getBackupInstallationToken() {
 
     // 1. Lokales Backup
     const backupDir = path.join(process.cwd(), "backups");
-    if (!fs.existsSync(backupDir)) fs.mkdirSync(backupDir);
+    // Notwendiger 'fs' Import ist oben vorhanden
+    if (!fs.existsSync(backupDir)) {
+      fs.mkdirSync(backupDir);
+    }
 
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-").replace("T", "_").split("Z")[0];
     const currentFilePath = path.join(process.cwd(), "server.cjs"); 
