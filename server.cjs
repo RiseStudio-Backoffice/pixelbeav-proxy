@@ -1,14 +1,17 @@
 /**
  * ==========================================================
- * 🌐 PixelBeav Proxy Server – server.cjs (FINAL SLIM & ROBUST)
- * Version: 1.8.4.S (Behebt Tippfehler und Key-Formatfehler für beide Keys)
+ * 🌐 PixelBeav Proxy Server – server.cjs (FINAL & ROBUST)
+ * Version: 1.8.5.S (Finaler Fix: Aggressive Trim & Robuste Key-Verarbeitung)
+ * ==========================================================
+ * Behebt den "secretOrPrivateKey" Fehler durch aggressive Entfernung von
+ * Whitespace, was die Kompatibilität mit Render-Environment-Variablen sicherstellt.
  * ==========================================================
  */
 
 const express = require("express");
 const jwt = require("jsonwebtoken");
 const path = require("path");
-const fs = require("fs"); // Notwendig für lokales Backup
+const fs = require("fs"); 
 const fetch = (...a) => import("node-fetch").then(({ default: f }) => f(...a));
 
 try {
@@ -24,18 +27,35 @@ const {
   PROXY_APP_ID, PROXY_INSTALLATION_ID, PROXY_PRIVATE_KEY, PROXY_REPO_OWNER, PROXY_REPO_NAME, PROXY_BRANCH,
 } = process.env;
 
-// DIESER CODE ERSETZT DIE ESCAPIERTEN ZEILENUMBRÜCHE FÜR BEIDE KEYS ROBUST
-// Dadurch wird der "secretOrPrivateKey" Fehler behoben.
-const APP_KEY = APP_PRIVATE_KEY && !APP_PRIVATE_KEY.includes('\n') 
-    ? APP_PRIVATE_KEY.replace(/\\n/g, '\n') 
-    : APP_PRIVATE_KEY;
 
-const PROXY_KEY = PROXY_PRIVATE_KEY && !PROXY_PRIVATE_KEY.includes('\n') 
-    ? PROXY_PRIVATE_KEY.replace(/\\n/g, '\n') 
-    : PROXY_PRIVATE_KEY;
+// ==========================================================
+// 🔑 ROBUSTE PRIVATE KEY VERARBEITUNG (Finaler Fix)
+// ==========================================================
+
+/**
+ * Verarbeitet den Private Key: Entfernt Whitespace und korrigiert ggf. Escaping.
+ */
+const processKey = (key) => {
+    if (!key) return null;
+    const trimmedKey = key.trim();
+    
+    // Fall 1: Der Key enthält bereits echten Zeilenumbruch (wie in Render)
+    if (trimmedKey.includes('\n')) {
+        return trimmedKey;
+    }
+    
+    // Fall 2: Der Key enthält escapte Zeilenumbrüche (z.B. in .env-Datei oder als Single-Line-Secret)
+    return trimmedKey.replace(/\\n/g, '\n');
+};
+
+const APP_KEY = processKey(APP_PRIVATE_KEY);
+const PROXY_KEY = processKey(PROXY_PRIVATE_KEY);
+
+// ==========================================================
+// ... (Rest des Codes)
+// ==========================================================
 
 console.log("🔐 Starting PixelBeav Proxy...");
-// Prüfe auf APP_KEY (der korrigierte Primary Key)
 if (!APP_ID || !INSTALLATION_ID || !REPO_OWNER || !REPO_NAME || !APP_KEY || !BRANCH) {
   console.error("❌ Fehlende ENV-Variablen. Bitte prüfen Sie die notwendigen Keys.");
   process.exit(1);
@@ -262,7 +282,6 @@ async function getBackupInstallationToken() {
   console.log("🧩 [Proxy-Backup] Initialisiere automatisches Backup-System ...");
 
   try {
-    // Verwendung von PROXY_KEY in der Variablenprüfung
     if (!PROXY_APP_ID || !PROXY_INSTALLATION_ID || !PROXY_KEY || !PROXY_REPO_OWNER || !PROXY_REPO_NAME) {
       console.error("❌ [Proxy-Backup] Fehlende Proxy-Variablen. Backup abgebrochen.");
       return;
@@ -270,7 +289,6 @@ async function getBackupInstallationToken() {
 
     // 1. Lokales Backup
     const backupDir = path.join(process.cwd(), "backups");
-    // Notwendiger 'fs' Import ist oben vorhanden
     if (!fs.existsSync(backupDir)) {
       fs.mkdirSync(backupDir);
     }
